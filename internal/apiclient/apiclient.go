@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/ghostfork/gf/shared/types"
 )
@@ -23,7 +25,7 @@ func New(baseURL, apiKey string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		APIKey:  apiKey,
-		http:    &http.Client{},
+		http:    &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -42,7 +44,7 @@ func (c *Client) Register(username, publicKey string) (string, error) {
 // GetUser fetches a user's public profile.
 func (c *Client) GetUser(username string) (*types.UserResponse, error) {
 	var resp types.UserResponse
-	err := c.doJSON(http.MethodGet, "/api/v1/users/"+username, c.APIKey, nil, &resp)
+	err := c.doJSON(http.MethodGet, "/api/v1/users/"+url.PathEscape(username), c.APIKey, nil, &resp)
 	return &resp, err
 }
 
@@ -208,5 +210,5 @@ func (c *Client) doRaw(method, path, apiKey string, data []byte) (*http.Response
 }
 
 func repoPath(org, repo string) string {
-	return "/api/v1/repos/" + org + "/" + repo
+	return "/api/v1/repos/" + url.PathEscape(org) + "/" + url.PathEscape(repo)
 }
