@@ -32,7 +32,10 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading identity: %w", err)
 	}
 
-	org, repoName := parseRepoArg(repoArg, cfg.Username)
+	org, repoName, err := parseRepoArg(repoArg, cfg.Username)
+	if err != nil {
+		return err
+	}
 	client := apiclient.New(cfg.ServerURL, cfg.APIKey)
 
 	// Fetch the target user's public key from the server.

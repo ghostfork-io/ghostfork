@@ -232,6 +232,11 @@ func unpackEncrypted(data, repoKey []byte, gitDir string) error {
 // ── push ──────────────────────────────────────────────────────────────────────
 
 func (h *helper) handlePush(w io.Writer, batch []string) error {
+	gitDir, err := findGitDir()
+	if err != nil {
+		return err
+	}
+
 	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
 	if err != nil {
 		return fmt.Errorf("loading identity: %w", err)
@@ -253,7 +258,7 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	}
 
 	for _, line := range batch {
-		// "push refs/heads/main:refs/heads/main"
+		// "push refs/heads/main:refs/heads/main" or "+refs/heads/main:refs/heads/main" (force)
 		spec := strings.TrimPrefix(line, "push ")
 		colon := strings.Index(spec, ":")
 		if colon < 0 {
@@ -263,7 +268,16 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		src := spec[:colon]
 		dst := spec[colon+1:]
 
-		if err := h.doPush(w, src, dst, repoKey, serverRefs); err != nil {
+		// Strip force-push marker; we always overwrite the remote ref tip.
+		src = strings.TrimPrefix(src, "+")
+
+		// Branch deletion (empty src) is not supported in V1.
+		if src == "" {
+			fmt.Fprintf(w, "error %s branch deletion not supported\n", dst)
+			continue
+		}
+
+		if err := h.doPush(w, src, dst, repoKey, serverRefs, gitDir); err != nil {
 			fmt.Fprintf(w, "error %s %v\n", dst, err)
 		}
 	}
@@ -272,9 +286,13 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	return nil
 }
 
-func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs []types.Ref) error {
+func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs []types.Ref, gitDir string) error {
+	gitEnv := append(os.Environ(), "GIT_DIR="+gitDir)
+
 	// Resolve the local ref to a commit SHA.
-	shaOut, err := exec.Command("git", "rev-parse", src).Output()
+	revParseCmd := exec.Command("git", "rev-parse", src)
+	revParseCmd.Env = gitEnv
+	shaOut, err := revParseCmd.Output()
 	if err != nil {
 		return fmt.Errorf("resolving %q: %w", src, err)
 	}
@@ -293,6 +311,7 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 		"--revs",
 	)
 	packCmd.Stdin = &revInput
+	packCmd.Env = gitEnv
 	packCmd.Stderr = os.Stderr
 	packData, err := packCmd.Output()
 	if err != nil {

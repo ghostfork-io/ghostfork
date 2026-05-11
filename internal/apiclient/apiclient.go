@@ -13,6 +13,10 @@ import (
 	"github.com/ghostfork/gf/shared/types"
 )
 
+// maxDownloadSize is the largest packfile blob the client will read (600 MiB,
+// slightly above the server's 512 MiB limit to account for encryption overhead).
+const maxDownloadSize = 600 << 20
+
 // Client is a typed HTTP client for the gfserver API.
 type Client struct {
 	BaseURL string
@@ -71,7 +75,7 @@ func (c *Client) GetRefs(org, repo string) ([]types.Ref, error) {
 
 // UpdateRef sets the tip SHA for a branch.
 func (c *Client) UpdateRef(org, repo, branch, sha string) error {
-	return c.doJSON(http.MethodPut, repoPath(org, repo)+"/refs/"+branch, c.APIKey,
+	return c.doJSON(http.MethodPut, repoPath(org, repo)+"/refs/"+url.PathEscape(branch), c.APIKey,
 		types.UpdateRefRequest{CommitSHA: sha}, nil)
 }
 
@@ -113,7 +117,7 @@ func (c *Client) DownloadPackfile(org, repo string, seq int64) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
 }
 
 // ── Keys ──────────────────────────────────────────────────────────────────────
@@ -121,19 +125,19 @@ func (c *Client) DownloadPackfile(org, repo string, seq int64) ([]byte, error) {
 // GetKey fetches the encrypted repo key for username.
 func (c *Client) GetKey(org, repo, username string) ([]byte, error) {
 	var resp types.KeyResponse
-	err := c.doJSON(http.MethodGet, repoPath(org, repo)+"/keys/"+username, c.APIKey, nil, &resp)
+	err := c.doJSON(http.MethodGet, repoPath(org, repo)+"/keys/"+url.PathEscape(username), c.APIKey, nil, &resp)
 	return resp.EncryptedKey, err
 }
 
 // PutKey stores an encrypted repo key for username.
 func (c *Client) PutKey(org, repo, username string, encKey []byte) error {
-	return c.doJSON(http.MethodPut, repoPath(org, repo)+"/keys/"+username, c.APIKey,
+	return c.doJSON(http.MethodPut, repoPath(org, repo)+"/keys/"+url.PathEscape(username), c.APIKey,
 		types.KeyRequest{EncryptedKey: encKey}, nil)
 }
 
 // DeleteKey removes the encrypted repo key for username (revokes access).
 func (c *Client) DeleteKey(org, repo, username string) error {
-	return c.doJSON(http.MethodDelete, repoPath(org, repo)+"/keys/"+username, c.APIKey, nil, nil)
+	return c.doJSON(http.MethodDelete, repoPath(org, repo)+"/keys/"+url.PathEscape(username), c.APIKey, nil, nil)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

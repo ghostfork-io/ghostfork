@@ -152,6 +152,9 @@ func DecryptPackfile(dst io.Writer, src io.Reader, repoKey []byte) error {
 			}
 			return nil
 		}
+		if plainSize > chunkSize {
+			return fmt.Errorf("chunk %d claims plaintext size %d exceeding maximum %d", idx, plainSize, chunkSize)
+		}
 
 		ct := make([]byte, int(plainSize)+aead.Overhead())
 		if _, err := io.ReadFull(src, ct); err != nil {

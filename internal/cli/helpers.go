@@ -19,9 +19,15 @@ func loadConfig() (*config.Config, error) {
 
 // parseRepoArg accepts either "reponame" or "org/reponame". When no org is
 // present the caller's own username is used as the org (V1 convention).
-func parseRepoArg(arg, defaultOrg string) (org, repo string) {
+// Returns an error if either component is empty after parsing.
+func parseRepoArg(arg, defaultOrg string) (org, repo string, err error) {
 	if i := strings.IndexByte(arg, '/'); i >= 0 {
-		return arg[:i], arg[i+1:]
+		org, repo = arg[:i], arg[i+1:]
+	} else {
+		org, repo = defaultOrg, arg
 	}
-	return defaultOrg, arg
+	if org == "" || repo == "" {
+		return "", "", fmt.Errorf("invalid repo argument %q: org and repo name must both be non-empty", arg)
+	}
+	return org, repo, nil
 }

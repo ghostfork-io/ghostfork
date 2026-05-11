@@ -59,5 +59,9 @@ func Save(gitDir string, s State) error {
 		return err
 	}
 
-	return os.Rename(tmpPath, Path(gitDir))
+	if err := os.Rename(tmpPath, Path(gitDir)); err != nil {
+		os.Remove(tmpPath) //nolint:errcheck
+		return err
+	}
+	return nil
 }

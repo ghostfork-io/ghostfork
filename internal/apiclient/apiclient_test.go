@@ -285,15 +285,16 @@ func TestGetKeyNotFoundReturnsError(t *testing.T) {
 
 func TestDeleteKey(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	alice := withRepo(t, ts, "alice", "alice", "repo")
+	// Register bob and grant him access so alice (owner) can then revoke it.
+	registered(t, ts, "bob")
+	alice.PutKey("alice", "repo", "bob", []byte("bob-key")) //nolint:errcheck
 
-	c.PutKey("alice", "repo", "alice", []byte("key")) //nolint:errcheck
-
-	if err := c.DeleteKey("alice", "repo", "alice"); err != nil {
+	if err := alice.DeleteKey("alice", "repo", "bob"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := c.GetKey("alice", "repo", "alice")
+	_, err := alice.GetKey("alice", "repo", "bob")
 	if err == nil {
 		t.Fatal("expected error after deletion, got nil")
 	}
