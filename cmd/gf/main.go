@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ghostfork/gf/internal/cli"
 )
 
 func main() {
@@ -11,6 +13,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "git-remote-gf: not yet implemented")
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "gf: CLI not yet implemented")
-	os.Exit(1)
+	if err := cli.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
