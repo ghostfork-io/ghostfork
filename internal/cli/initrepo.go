@@ -40,7 +40,7 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("encrypting repo key: %w", err)
 	}
 
-	// In V1 the org is always the owner's username.
+	// In V1, init-repo defaults the org to the caller's username.
 	org := cfg.Username
 	client := apiclient.New(cfg.ServerURL, cfg.APIKey)
 	if err := client.CreateRepo(org, repoName, encKey); err != nil {

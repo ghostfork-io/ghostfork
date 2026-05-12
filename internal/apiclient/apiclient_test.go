@@ -286,7 +286,7 @@ func TestGetKeyNotFoundReturnsError(t *testing.T) {
 func TestDeleteKey(t *testing.T) {
 	ts := testserver.Start(t)
 	alice := withRepo(t, ts, "alice", "alice", "repo")
-	// Register bob and grant him access so alice (owner) can then revoke it.
+	// Register bob and grant him access so alice can then revoke it.
 	registered(t, ts, "bob")
 	alice.PutKey("alice", "repo", "bob", []byte("bob-key")) //nolint:errcheck
 
