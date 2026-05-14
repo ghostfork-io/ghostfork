@@ -19,6 +19,12 @@ type Config struct {
 
 // DefaultPath returns the path to the config file.
 // Overridable via GF_CONFIG env var (used in tests to avoid touching ~/.config).
+//
+// os.UserConfigDir's error is intentionally dropped: it only fires when
+// neither $HOME nor $XDG_CONFIG_HOME is set (or the platform equivalent),
+// which is effectively unreachable on a real user machine. In that case
+// the returned path is relative ("gf/config") and the user should set
+// GF_CONFIG to override.
 func DefaultPath() string {
 	if p := os.Getenv("GF_CONFIG"); p != "" {
 		return p
@@ -28,7 +34,8 @@ func DefaultPath() string {
 }
 
 // DefaultIdentityPath returns the path to the age private key file.
-// Overridable via GF_IDENTITY env var.
+// Overridable via GF_IDENTITY env var. The os.UserConfigDir error is
+// dropped for the same reason as DefaultPath.
 func DefaultIdentityPath() string {
 	if p := os.Getenv("GF_IDENTITY"); p != "" {
 		return p
