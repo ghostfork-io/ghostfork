@@ -5,8 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ghostfork/gf/internal/apiclient"
-	"github.com/ghostfork/gf/internal/config"
 	"github.com/ghostfork/gf/internal/crypto"
 )
 
@@ -20,14 +18,13 @@ var initRepoCmd = &cobra.Command{
 func runInitRepo(cmd *cobra.Command, args []string) error {
 	repoName := args[0]
 
-	cfg, err := loadConfig()
+	sess, err := loadSession()
 	if err != nil {
 		return err
 	}
-
-	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
+	id, err := loadIdentity()
 	if err != nil {
-		return fmt.Errorf("loading identity: %w", err)
+		return err
 	}
 
 	repoKey, err := crypto.GenerateRepoKey()
@@ -41,9 +38,8 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 	}
 
 	// In V1, init-repo defaults the org to the caller's username.
-	org := cfg.Username
-	client := apiclient.New(cfg.ServerURL, cfg.APIKey)
-	if err := client.CreateRepo(org, repoName, encKey); err != nil {
+	org := sess.cfg.Username
+	if err := sess.client.CreateRepo(org, repoName, encKey); err != nil {
 		return fmt.Errorf("creating repo: %w", err)
 	}
 

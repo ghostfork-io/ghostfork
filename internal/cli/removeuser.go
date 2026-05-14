@@ -4,8 +4,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-
-	"github.com/ghostfork/gf/internal/apiclient"
 )
 
 var removeUserCmd = &cobra.Command{
@@ -19,18 +17,17 @@ func runRemoveUser(cmd *cobra.Command, args []string) error {
 	repoArg := args[0]
 	targetUsername := args[1]
 
-	cfg, err := loadConfig()
+	sess, err := loadSession()
 	if err != nil {
 		return err
 	}
 
-	org, repoName, err := parseRepoArg(repoArg, cfg.Username)
+	org, repoName, err := parseRepoArg(repoArg, sess.cfg.Username)
 	if err != nil {
 		return err
 	}
-	client := apiclient.New(cfg.ServerURL, cfg.APIKey)
 
-	if err := client.DeleteKey(org, repoName, targetUsername); err != nil {
+	if err := sess.client.DeleteKey(org, repoName, targetUsername); err != nil {
 		return fmt.Errorf("removing %q from %s/%s: %w", targetUsername, org, repoName, err)
 	}
 

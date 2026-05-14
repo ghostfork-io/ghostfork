@@ -6,8 +6,6 @@ import (
 	"filippo.io/age"
 	"github.com/spf13/cobra"
 
-	"github.com/ghostfork/gf/internal/apiclient"
-	"github.com/ghostfork/gf/internal/config"
 	"github.com/ghostfork/gf/internal/crypto"
 )
 
@@ -22,24 +20,22 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	repoArg := args[0]
 	targetUsername := args[1]
 
-	cfg, err := loadConfig()
+	sess, err := loadSession()
+	if err != nil {
+		return err
+	}
+	id, err := loadIdentity()
 	if err != nil {
 		return err
 	}
 
-	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
-	if err != nil {
-		return fmt.Errorf("loading identity: %w", err)
-	}
-
-	org, repoName, err := parseRepoArg(repoArg, cfg.Username)
+	org, repoName, err := parseRepoArg(repoArg, sess.cfg.Username)
 	if err != nil {
 		return err
 	}
-	client := apiclient.New(cfg.ServerURL, cfg.APIKey)
 
 	// Fetch the target user's public key from the server.
-	targetUser, err := client.GetUser(targetUsername)
+	targetUser, err := sess.client.GetUser(targetUsername)
 	if err != nil {
 		return fmt.Errorf("fetching user %q: %w", targetUsername, err)
 	}
@@ -50,7 +46,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	}
 
 	// Fetch and decrypt our own copy of the repo key.
-	myEncKey, err := client.GetKey(org, repoName, cfg.Username)
+	myEncKey, err := sess.client.GetKey(org, repoName, sess.cfg.Username)
 	if err != nil {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
@@ -66,7 +62,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("encrypting repo key for %q: %w", targetUsername, err)
 	}
 
-	if err := client.PutKey(org, repoName, targetUsername, newEncKey); err != nil {
+	if err := sess.client.PutKey(org, repoName, targetUsername, newEncKey); err != nil {
 		return fmt.Errorf("storing key for %q: %w", targetUsername, err)
 	}
 
