@@ -31,37 +31,50 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	identityPath := config.DefaultIdentityPath()
 	cfgPath := config.DefaultPath()
 
-	// If both config and identity already exist for the same credentials, we're
-	// already logged in — do nothing (avoids overwriting the identity file).
+	// If an identity file is already on disk, this machine has been logged in
+	// before. Decide what to do based on whether the saved config matches the
+	// requested credentials.
 	if _, err := os.Stat(identityPath); err == nil {
-		if cfg, err := config.Load(cfgPath); err == nil {
-			if cfg.Username == username && cfg.ServerURL == serverURL {
-				fmt.Fprintf(cmd.OutOrStdout(), "Already logged in as %s.\n", username)
-				return nil
-			}
+		cfg, cfgErr := config.Load(cfgPath)
+		if cfgErr != nil {
+			// Identity present but no usable config: the API key for the
+			// previous account is unrecoverable in V1 (see CLAUDE.md threat
+			// model on key loss). Refuse rather than silently re-register a
+			// second server account against the same public key.
+			return fmt.Errorf(
+				"identity file already exists at %s but no usable config was found.\n"+
+					"The API key for the previous account on this identity cannot be\n"+
+					"recovered in V1. To start fresh with a new identity, delete\n"+
+					"%s and run gf login again",
+				identityPath, identityPath)
 		}
+		if cfg.Username == username && cfg.ServerURL == serverURL {
+			fmt.Fprintf(cmd.OutOrStdout(), "Already logged in as %s.\n", username)
+			return nil
+		}
+		return fmt.Errorf(
+			"this machine is already logged in as %s on %s.\n"+
+				"To log in as a different user, use a different machine or delete\n"+
+				"%s first (destructive — see CLAUDE.md threat model on key loss)",
+			cfg.Username, cfg.ServerURL, identityPath)
 	}
 
-	// Generate identity only if the file does not exist yet.
-	if _, err := os.Stat(identityPath); os.IsNotExist(err) {
-		id, err := crypto.GenerateIdentity()
-		if err != nil {
-			return fmt.Errorf("generating identity: %w", err)
-		}
-		if err := crypto.SaveIdentity(identityPath, id); err != nil {
-			return fmt.Errorf("saving identity: %w", err)
-		}
-	}
-
-	id, err := crypto.LoadIdentity(identityPath)
+	// No identity yet — fresh login. Generate the keypair in memory and
+	// register with the server before writing anything to disk, so a Register
+	// failure leaves no local state to clean up.
+	id, err := crypto.GenerateIdentity()
 	if err != nil {
-		return fmt.Errorf("loading identity: %w", err)
+		return fmt.Errorf("generating identity: %w", err)
 	}
 
 	client := apiclient.New(serverURL, "")
 	apiKey, err := client.Register(username, id.Recipient().String())
 	if err != nil {
 		return fmt.Errorf("registering with server: %w", err)
+	}
+
+	if err := crypto.SaveIdentity(identityPath, id); err != nil {
+		return fmt.Errorf("saving identity: %w", err)
 	}
 
 	cfg := &config.Config{
