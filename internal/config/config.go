@@ -1,10 +1,13 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/ghostfork/gf/internal/atomicfile"
 )
 
 // Config holds the user's persistent client configuration.
@@ -43,15 +46,11 @@ func Load(path string) (*Config, error) {
 	return &c, nil
 }
 
-// Save writes cfg to path in TOML format, creating parent directories as needed.
+// Save writes cfg to path atomically in TOML format, creating parent
+// directories as needed. A crash or encode error never corrupts an existing
+// config file — important because the file holds the user's API key.
 func Save(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
+	return atomicfile.Write(path, 0600, func(w io.Writer) error {
+		return toml.NewEncoder(w).Encode(cfg)
+	})
 }

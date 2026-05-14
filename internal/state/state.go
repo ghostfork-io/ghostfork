@@ -1,10 +1,13 @@
 package state
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/ghostfork/gf/internal/atomicfile"
 )
 
 // State is the per-clone state stored in .git/gf/state.
@@ -35,33 +38,8 @@ func Load(gitDir string) (State, error) {
 }
 
 // Save writes s atomically to the state file for gitDir.
-// It writes to a .tmp file first, then renames it into place so that a
-// failed write never leaves the state file in a partial or corrupt state.
 func Save(gitDir string, s State) error {
-	dir := filepath.Join(gitDir, "gf")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-
-	tmpPath := filepath.Join(dir, "state.tmp")
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
-
-	if err := toml.NewEncoder(f).Encode(s); err != nil {
-		f.Close()
-		os.Remove(tmpPath) //nolint:errcheck
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmpPath) //nolint:errcheck
-		return err
-	}
-
-	if err := os.Rename(tmpPath, Path(gitDir)); err != nil {
-		os.Remove(tmpPath) //nolint:errcheck
-		return err
-	}
-	return nil
+	return atomicfile.Write(Path(gitDir), 0600, func(w io.Writer) error {
+		return toml.NewEncoder(w).Encode(s)
+	})
 }
