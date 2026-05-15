@@ -9,6 +9,7 @@ var rootCmd = &cobra.Command{
 	Short: "GhostFork — zero-trust encrypted Git remote",
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 }
 
 func init() {
