@@ -81,7 +81,7 @@ func TestSaveCreatesDirectory(t *testing.T) {
 func TestSaveRoundTrip(t *testing.T) {
 	gitDir := t.TempDir()
 	original := state.State{
-		Repo:      "org/project",
+		Repo:      "alice/project",
 		ServerURL: "https://api.gf.dev",
 		LastSeq:   99,
 	}

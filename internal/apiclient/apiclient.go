@@ -55,10 +55,11 @@ func (c *Client) GetUser(username string) (*types.UserResponse, error) {
 // ── Repos ─────────────────────────────────────────────────────────────────────
 
 // CreateRepo creates a new repo and registers the caller as its first member.
-// encKey is the repo's symmetric key encrypted with the caller's public key.
-func (c *Client) CreateRepo(org, name string, encKey []byte) error {
+// The repo's owner is always the authenticated caller; the server derives it
+// from the API key. encKey is the repo's symmetric key encrypted with the
+// caller's public key.
+func (c *Client) CreateRepo(name string, encKey []byte) error {
 	return c.doJSON(http.MethodPost, "/api/v1/repos", c.APIKey, types.CreateRepoRequest{
-		Org:          org,
 		Name:         name,
 		EncryptedKey: encKey,
 	}, nil)
@@ -67,23 +68,23 @@ func (c *Client) CreateRepo(org, name string, encKey []byte) error {
 // ── Refs ──────────────────────────────────────────────────────────────────────
 
 // GetRefs returns all branch→SHA refs for a repo.
-func (c *Client) GetRefs(org, repo string) ([]types.Ref, error) {
+func (c *Client) GetRefs(owner, repo string) ([]types.Ref, error) {
 	var resp types.RefsResponse
-	err := c.doJSON(http.MethodGet, repoPath(org, repo)+"/refs", c.APIKey, nil, &resp)
+	err := c.doJSON(http.MethodGet, repoPath(owner, repo)+"/refs", c.APIKey, nil, &resp)
 	return resp.Refs, err
 }
 
 // UpdateRef sets the tip SHA for a branch.
-func (c *Client) UpdateRef(org, repo, branch, sha string) error {
-	return c.doJSON(http.MethodPut, repoPath(org, repo)+"/refs/"+url.PathEscape(branch), c.APIKey,
+func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
+	return c.doJSON(http.MethodPut, repoPath(owner, repo)+"/refs/"+url.PathEscape(branch), c.APIKey,
 		types.UpdateRefRequest{CommitSHA: sha}, nil)
 }
 
 // ── Packfiles ─────────────────────────────────────────────────────────────────
 
 // UploadPackfile stores an encrypted packfile blob and returns its sequence number.
-func (c *Client) UploadPackfile(org, repo string, data []byte) (int64, error) {
-	resp, err := c.doRaw(http.MethodPost, repoPath(org, repo)+"/packfiles", c.APIKey, data)
+func (c *Client) UploadPackfile(owner, repo string, data []byte) (int64, error) {
+	resp, err := c.doRaw(http.MethodPost, repoPath(owner, repo)+"/packfiles", c.APIKey, data)
 	if err != nil {
 		return 0, err
 	}
@@ -96,8 +97,8 @@ func (c *Client) UploadPackfile(org, repo string, data []byte) (int64, error) {
 }
 
 // ListPackfiles returns all sequence numbers with seq > afterSeq.
-func (c *Client) ListPackfiles(org, repo string, afterSeq int64) ([]int64, error) {
-	path := repoPath(org, repo) + "/packfiles?after=" + strconv.FormatInt(afterSeq, 10)
+func (c *Client) ListPackfiles(owner, repo string, afterSeq int64) ([]int64, error) {
+	path := repoPath(owner, repo) + "/packfiles?after=" + strconv.FormatInt(afterSeq, 10)
 	var resp types.PackfileListResponse
 	if err := c.doJSON(http.MethodGet, path, c.APIKey, nil, &resp); err != nil {
 		return nil, err
@@ -110,8 +111,8 @@ func (c *Client) ListPackfiles(org, repo string, afterSeq int64) ([]int64, error
 }
 
 // DownloadPackfile fetches the raw bytes of one packfile by sequence number.
-func (c *Client) DownloadPackfile(org, repo string, seq int64) ([]byte, error) {
-	path := repoPath(org, repo) + "/packfiles/" + strconv.FormatInt(seq, 10)
+func (c *Client) DownloadPackfile(owner, repo string, seq int64) ([]byte, error) {
+	path := repoPath(owner, repo) + "/packfiles/" + strconv.FormatInt(seq, 10)
 	resp, err := c.doRaw(http.MethodGet, path, c.APIKey, nil)
 	if err != nil {
 		return nil, err
@@ -123,21 +124,21 @@ func (c *Client) DownloadPackfile(org, repo string, seq int64) ([]byte, error) {
 // ── Keys ──────────────────────────────────────────────────────────────────────
 
 // GetKey fetches the encrypted repo key for username.
-func (c *Client) GetKey(org, repo, username string) ([]byte, error) {
+func (c *Client) GetKey(owner, repo, username string) ([]byte, error) {
 	var resp types.KeyResponse
-	err := c.doJSON(http.MethodGet, repoPath(org, repo)+"/keys/"+url.PathEscape(username), c.APIKey, nil, &resp)
+	err := c.doJSON(http.MethodGet, repoPath(owner, repo)+"/keys/"+url.PathEscape(username), c.APIKey, nil, &resp)
 	return resp.EncryptedKey, err
 }
 
 // PutKey stores an encrypted repo key for username.
-func (c *Client) PutKey(org, repo, username string, encKey []byte) error {
-	return c.doJSON(http.MethodPut, repoPath(org, repo)+"/keys/"+url.PathEscape(username), c.APIKey,
+func (c *Client) PutKey(owner, repo, username string, encKey []byte) error {
+	return c.doJSON(http.MethodPut, repoPath(owner, repo)+"/keys/"+url.PathEscape(username), c.APIKey,
 		types.KeyRequest{EncryptedKey: encKey}, nil)
 }
 
 // DeleteKey removes the encrypted repo key for username (revokes access).
-func (c *Client) DeleteKey(org, repo, username string) error {
-	return c.doJSON(http.MethodDelete, repoPath(org, repo)+"/keys/"+url.PathEscape(username), c.APIKey, nil, nil)
+func (c *Client) DeleteKey(owner, repo, username string) error {
+	return c.doJSON(http.MethodDelete, repoPath(owner, repo)+"/keys/"+url.PathEscape(username), c.APIKey, nil, nil)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -213,6 +214,6 @@ func (c *Client) doRaw(method, path, apiKey string, data []byte) (*http.Response
 	return resp, nil
 }
 
-func repoPath(org, repo string) string {
-	return "/api/v1/repos/" + url.PathEscape(org) + "/" + url.PathEscape(repo)
+func repoPath(owner, repo string) string {
+	return "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo)
 }

@@ -37,13 +37,13 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("encrypting repo key: %w", err)
 	}
 
-	// In V1, init-repo defaults the org to the caller's username.
-	org := sess.cfg.Username
-	if err := sess.client.CreateRepo(org, repoName, encKey); err != nil {
+	// The repo owner is always the caller; the server derives it from the
+	// authenticated session, so we just pass the name.
+	if err := sess.client.CreateRepo(repoName, encKey); err != nil {
 		return fmt.Errorf("creating repo: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Repo created. Add as a remote with:\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "  git remote add origin gf://%s/%s\n", org, repoName)
+	fmt.Fprintf(cmd.OutOrStdout(), "  git remote add origin gf://%s/%s\n", sess.cfg.Username, repoName)
 	return nil
 }

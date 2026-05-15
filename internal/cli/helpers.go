@@ -41,17 +41,17 @@ func loadIdentity() (*age.X25519Identity, error) {
 	return id, nil
 }
 
-// parseRepoArg accepts either "reponame" or "org/reponame". When no org is
-// present the caller's own username is used as the default org.
+// parseRepoArg accepts either "reponame" or "owner/reponame". When no owner is
+// present the caller's own username is used as the default owner.
 // Returns an error if either component is empty after parsing.
-func parseRepoArg(arg, defaultOrg string) (org, repo string, err error) {
+func parseRepoArg(arg, defaultOwner string) (owner, repo string, err error) {
 	if i := strings.IndexByte(arg, '/'); i >= 0 {
-		org, repo = arg[:i], arg[i+1:]
+		owner, repo = arg[:i], arg[i+1:]
 	} else {
-		org, repo = defaultOrg, arg
+		owner, repo = defaultOwner, arg
 	}
-	if org == "" || repo == "" {
-		return "", "", fmt.Errorf("invalid repo argument %q: org and repo name must both be non-empty", arg)
+	if owner == "" || repo == "" {
+		return "", "", fmt.Errorf("invalid repo argument %q: owner and repo name must both be non-empty", arg)
 	}
-	return org, repo, nil
+	return owner, repo, nil
 }

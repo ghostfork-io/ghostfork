@@ -29,7 +29,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	org, repoName, err := parseRepoArg(repoArg, sess.cfg.Username)
+	owner, repoName, err := parseRepoArg(repoArg, sess.cfg.Username)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	}
 
 	// Fetch and decrypt our own copy of the repo key.
-	myEncKey, err := sess.client.GetKey(org, repoName, sess.cfg.Username)
+	myEncKey, err := sess.client.GetKey(owner, repoName, sess.cfg.Username)
 	if err != nil {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
@@ -62,10 +62,10 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("encrypting repo key for %q: %w", targetUsername, err)
 	}
 
-	if err := sess.client.PutKey(org, repoName, targetUsername, newEncKey); err != nil {
+	if err := sess.client.PutKey(owner, repoName, targetUsername, newEncKey); err != nil {
 		return fmt.Errorf("storing key for %q: %w", targetUsername, err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s/%s.\n", targetUsername, org, repoName)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s/%s.\n", targetUsername, owner, repoName)
 	return nil
 }

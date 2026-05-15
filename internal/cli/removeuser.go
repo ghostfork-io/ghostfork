@@ -22,15 +22,15 @@ func runRemoveUser(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	org, repoName, err := parseRepoArg(repoArg, sess.cfg.Username)
+	owner, repoName, err := parseRepoArg(repoArg, sess.cfg.Username)
 	if err != nil {
 		return err
 	}
 
-	if err := sess.client.DeleteKey(org, repoName, targetUsername); err != nil {
-		return fmt.Errorf("removing %q from %s/%s: %w", targetUsername, org, repoName, err)
+	if err := sess.client.DeleteKey(owner, repoName, targetUsername); err != nil {
+		return fmt.Errorf("removing %q from %s/%s: %w", targetUsername, owner, repoName, err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "%s removed from %s/%s.\n", targetUsername, org, repoName)
+	fmt.Fprintf(cmd.OutOrStdout(), "%s removed from %s/%s.\n", targetUsername, owner, repoName)
 	return nil
 }

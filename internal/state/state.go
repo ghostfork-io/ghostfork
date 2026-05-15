@@ -14,7 +14,7 @@ import (
 // It tracks which packfiles have already been downloaded so incremental
 // pulls only fetch new ones.
 type State struct {
-	Repo      string `toml:"repo"`       // "org/name"
+	Repo      string `toml:"repo"`       // "owner/name"
 	ServerURL string `toml:"server_url"`
 	LastSeq   int64  `toml:"last_seq"`
 }

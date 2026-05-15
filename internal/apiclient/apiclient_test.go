@@ -21,11 +21,12 @@ func registered(t *testing.T, ts *testserver.TestServer, username string) *apicl
 	return apiclient.New(ts.URL, apiKey)
 }
 
-// withRepo registers a user, creates a repo, and returns the client.
-func withRepo(t *testing.T, ts *testserver.TestServer, username, org, name string) *apiclient.Client {
+// withRepo registers a user, creates a repo, and returns the client. The repo
+// is always owned by the registered user; URL-level owner is the username.
+func withRepo(t *testing.T, ts *testserver.TestServer, username, name string) *apiclient.Client {
 	t.Helper()
 	c := registered(t, ts, username)
-	if err := c.CreateRepo(org, name, []byte("fake-enc-key")); err != nil {
+	if err := c.CreateRepo(name, []byte("fake-enc-key")); err != nil {
 		t.Fatalf("create repo: %v", err)
 	}
 	return c
@@ -93,7 +94,7 @@ func TestCreateRepo(t *testing.T) {
 	ts := testserver.Start(t)
 	c := registered(t, ts, "alice")
 
-	if err := c.CreateRepo("alice", "myrepo", []byte("enc-key")); err != nil {
+	if err := c.CreateRepo("myrepo", []byte("enc-key")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -102,10 +103,10 @@ func TestCreateRepoDuplicateReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
 	c := registered(t, ts, "alice")
 
-	if err := c.CreateRepo("alice", "myrepo", []byte("enc-key")); err != nil {
+	if err := c.CreateRepo("myrepo", []byte("enc-key")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.CreateRepo("alice", "myrepo", []byte("enc-key")); err == nil {
+	if err := c.CreateRepo("myrepo", []byte("enc-key")); err == nil {
 		t.Fatal("expected error for duplicate repo, got nil")
 	}
 }
@@ -114,7 +115,7 @@ func TestCreateRepoDuplicateReturnsError(t *testing.T) {
 
 func TestGetRefsEmptyOnNewRepo(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	refs, err := c.GetRefs("alice", "repo")
 	if err != nil {
@@ -127,7 +128,7 @@ func TestGetRefsEmptyOnNewRepo(t *testing.T) {
 
 func TestUpdateAndGetRefs(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	if err := c.UpdateRef("alice", "repo", "main", "abc123"); err != nil {
 		t.Fatal(err)
@@ -147,7 +148,7 @@ func TestUpdateAndGetRefs(t *testing.T) {
 
 func TestUpdateRefReplacesPreviousValue(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	c.UpdateRef("alice", "repo", "main", "aaa") //nolint:errcheck
 	c.UpdateRef("alice", "repo", "main", "bbb") //nolint:errcheck
@@ -162,7 +163,7 @@ func TestUpdateRefReplacesPreviousValue(t *testing.T) {
 
 func TestUploadPackfileReturnsSeq1(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	seq, err := c.UploadPackfile("alice", "repo", []byte("packdata"))
 	if err != nil {
@@ -175,7 +176,7 @@ func TestUploadPackfileReturnsSeq1(t *testing.T) {
 
 func TestUploadPackfileSequentialSeqs(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	for i := int64(1); i <= 3; i++ {
 		seq, err := c.UploadPackfile("alice", "repo", []byte("pack"))
@@ -190,7 +191,7 @@ func TestUploadPackfileSequentialSeqs(t *testing.T) {
 
 func TestListPackfilesReturnsAllSeqs(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	for range 3 {
 		c.UploadPackfile("alice", "repo", []byte("pack")) //nolint:errcheck
@@ -212,7 +213,7 @@ func TestListPackfilesReturnsAllSeqs(t *testing.T) {
 
 func TestListPackfilesAfterN(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	for range 3 {
 		c.UploadPackfile("alice", "repo", []byte("pack")) //nolint:errcheck
@@ -229,7 +230,7 @@ func TestListPackfilesAfterN(t *testing.T) {
 
 func TestDownloadPackfileMatchesUpload(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	payload := []byte("encrypted-packfile-contents")
 	seq, _ := c.UploadPackfile("alice", "repo", payload)
@@ -245,7 +246,7 @@ func TestDownloadPackfileMatchesUpload(t *testing.T) {
 
 func TestDownloadNonexistentPackfileReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	_, err := c.DownloadPackfile("alice", "repo", 99)
 	if err == nil {
@@ -257,7 +258,7 @@ func TestDownloadNonexistentPackfileReturnsError(t *testing.T) {
 
 func TestPutAndGetKey(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	encKey := []byte("encrypted-repo-key-bytes")
 	if err := c.PutKey("alice", "repo", "alice", encKey); err != nil {
@@ -275,7 +276,7 @@ func TestPutAndGetKey(t *testing.T) {
 
 func TestGetKeyNotFoundReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
-	c := withRepo(t, ts, "alice", "alice", "repo")
+	c := withRepo(t, ts, "alice", "repo")
 
 	_, err := c.GetKey("alice", "repo", "nobody")
 	if err == nil {
@@ -285,7 +286,7 @@ func TestGetKeyNotFoundReturnsError(t *testing.T) {
 
 func TestDeleteKey(t *testing.T) {
 	ts := testserver.Start(t)
-	alice := withRepo(t, ts, "alice", "alice", "repo")
+	alice := withRepo(t, ts, "alice", "repo")
 	// Register bob and grant him access so alice can then revoke it.
 	registered(t, ts, "bob")
 	alice.PutKey("alice", "repo", "bob", []byte("bob-key")) //nolint:errcheck
@@ -326,7 +327,7 @@ func TestNoAPIKeyReturnsError(t *testing.T) {
 
 func TestForbiddenRepoReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
-	withRepo(t, ts, "alice", "alice", "secret")
+	withRepo(t, ts, "alice", "secret")
 	bob := registered(t, ts, "bob")
 
 	_, err := bob.GetRefs("alice", "secret")

@@ -30,7 +30,7 @@ func Run() {
 	}
 
 	remoteURL := os.Args[2]
-	org, repo, err := parseURL(remoteURL)
+	owner, repo, err := parseURL(remoteURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "git-remote-gf: invalid URL %q: %v\n", remoteURL, err)
 		os.Exit(1)
@@ -43,7 +43,7 @@ func Run() {
 	}
 
 	h := &helper{
-		org:    org,
+		owner:  owner,
 		repo:   repo,
 		cfg:    cfg,
 		client: apiclient.New(cfg.ServerURL, cfg.APIKey),
@@ -56,7 +56,7 @@ func Run() {
 }
 
 type helper struct {
-	org    string
+	owner  string
 	repo   string
 	cfg    *config.Config
 	client *apiclient.Client
@@ -120,7 +120,7 @@ func (h *helper) run(r io.Reader, w io.Writer) error {
 // ── list ──────────────────────────────────────────────────────────────────────
 
 func (h *helper) handleList(w io.Writer) error {
-	refs, err := h.client.GetRefs(h.org, h.repo)
+	refs, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
 		return fmt.Errorf("listing refs: %w", err)
 	}
@@ -159,7 +159,7 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 		return fmt.Errorf("loading identity: %w", err)
 	}
 
-	encKey, err := h.client.GetKey(h.org, h.repo, h.cfg.Username)
+	encKey, err := h.client.GetKey(h.owner, h.repo, h.cfg.Username)
 	if err != nil {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
@@ -169,13 +169,13 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
 
-	seqs, err := h.client.ListPackfiles(h.org, h.repo, st.LastSeq)
+	seqs, err := h.client.ListPackfiles(h.owner, h.repo, st.LastSeq)
 	if err != nil {
 		return fmt.Errorf("listing packfiles: %w", err)
 	}
 
 	for _, seq := range seqs {
-		data, err := h.client.DownloadPackfile(h.org, h.repo, seq)
+		data, err := h.client.DownloadPackfile(h.owner, h.repo, seq)
 		if err != nil {
 			return fmt.Errorf("downloading packfile seq=%d: %w", seq, err)
 		}
@@ -188,7 +188,7 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	}
 
 	// Persist state only after every packfile has been successfully unpacked.
-	st.Repo = h.org + "/" + h.repo
+	st.Repo = h.owner + "/" + h.repo
 	st.ServerURL = h.cfg.ServerURL
 	if err := state.Save(gitDir, st); err != nil {
 		return fmt.Errorf("saving state: %w", err)
@@ -242,7 +242,7 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		return fmt.Errorf("loading identity: %w", err)
 	}
 
-	encKey, err := h.client.GetKey(h.org, h.repo, h.cfg.Username)
+	encKey, err := h.client.GetKey(h.owner, h.repo, h.cfg.Username)
 	if err != nil {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
@@ -252,7 +252,7 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
 
-	serverRefs, err := h.client.GetRefs(h.org, h.repo)
+	serverRefs, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
 		return fmt.Errorf("getting server refs: %w", err)
 	}
@@ -325,13 +325,13 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	}
 
 	// Upload.
-	if _, err := h.client.UploadPackfile(h.org, h.repo, encrypted.Bytes()); err != nil {
+	if _, err := h.client.UploadPackfile(h.owner, h.repo, encrypted.Bytes()); err != nil {
 		return fmt.Errorf("uploading packfile: %w", err)
 	}
 
 	// Update the remote ref tip.
 	branch := strings.TrimPrefix(dst, "refs/heads/")
-	if err := h.client.UpdateRef(h.org, h.repo, branch, newSHA); err != nil {
+	if err := h.client.UpdateRef(h.owner, h.repo, branch, newSHA); err != nil {
 		return fmt.Errorf("updating ref: %w", err)
 	}
 
@@ -341,8 +341,8 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// parseURL parses a gf://org/repo URL into its components.
-func parseURL(rawURL string) (org, repo string, err error) {
+// parseURL parses a gf://owner/repo URL into its components.
+func parseURL(rawURL string) (owner, repo string, err error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", "", err
@@ -350,12 +350,12 @@ func parseURL(rawURL string) (org, repo string, err error) {
 	if u.Scheme != "gf" {
 		return "", "", fmt.Errorf("expected gf:// scheme, got %q", u.Scheme)
 	}
-	org = u.Host
+	owner = u.Host
 	repo = strings.TrimPrefix(u.Path, "/")
-	if org == "" || repo == "" {
-		return "", "", fmt.Errorf("URL must be gf://<org>/<repo>")
+	if owner == "" || repo == "" {
+		return "", "", fmt.Errorf("URL must be gf://<owner>/<repo>")
 	}
-	return org, repo, nil
+	return owner, repo, nil
 }
 
 // findGitDir returns the absolute path of the .git directory for the current

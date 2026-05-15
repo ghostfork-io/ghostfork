@@ -19,9 +19,10 @@ type UserResponse struct {
 // ── Repos ─────────────────────────────────────────────────────────────────────
 
 // CreateRepoRequest includes the encrypted repo key so the server can
-// atomically create the repo and add the creator as first member.
+// atomically create the repo and add the creator as first member. The repo
+// owner is always the authenticated caller — there is no separate owner
+// field on the wire.
 type CreateRepoRequest struct {
-	Org          string `json:"org"`
 	Name         string `json:"name"`
 	EncryptedKey []byte `json:"encrypted_key"`
 }
