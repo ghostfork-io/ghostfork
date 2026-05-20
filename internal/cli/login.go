@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -30,6 +31,13 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	identityPath := config.DefaultIdentityPath()
 	cfgPath := config.DefaultPath()
+
+	slog.Debug("login start",
+		slog.String("server", serverURL),
+		slog.String("username", username),
+		slog.String("identity_path", identityPath),
+		slog.String("config_path", cfgPath),
+	)
 
 	// If an identity file is already on disk, this machine has been logged in
 	// before. Decide what to do based on whether the saved config matches the
@@ -62,16 +70,20 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	// No identity yet — fresh login. Generate the keypair in memory and
 	// register with the server before writing anything to disk, so a Register
 	// failure leaves no local state to clean up.
+	slog.Debug("generating new identity")
 	id, err := crypto.GenerateIdentity()
 	if err != nil {
 		return fmt.Errorf("generating identity: %w", err)
 	}
 
+	slog.Debug("registering with server", slog.String("server", serverURL))
 	client := apiclient.New(serverURL, "")
 	apiKey, err := client.Register(username, id.Recipient().String())
 	if err != nil {
 		return fmt.Errorf("registering with server: %w", err)
 	}
+	// NEVER include apiKey in logs — it is a bearer credential.
+	slog.Debug("server registration complete")
 
 	if err := crypto.SaveIdentity(identityPath, id); err != nil {
 		return fmt.Errorf("saving identity: %w", err)
@@ -85,6 +97,10 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if err := config.Save(cfgPath, cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
+	slog.Debug("identity and config written",
+		slog.String("identity_path", identityPath),
+		slog.String("config_path", cfgPath),
+	)
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Logged in as %s.\n", username)
 	return nil

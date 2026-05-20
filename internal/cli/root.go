@@ -2,17 +2,26 @@ package cli
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/ghostfork/gf/internal/logging"
 )
 
+var verbose bool
+
 var rootCmd = &cobra.Command{
-	Use:   "gf",
-	Short: "GhostFork — zero-trust encrypted Git remote",
+	Use:           "gf",
+	Short:         "GhostFork — zero-trust encrypted Git remote",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		logging.SetDefault(logging.NewCLI(verbose))
+	},
 }
 
 func init() {
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "log debug-level details to stderr")
+
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(initRepoCmd)
 	rootCmd.AddCommand(addUserCmd)

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"github.com/ghostfork/gf/internal/apiclient"
 	"github.com/ghostfork/gf/internal/config"
 	"github.com/ghostfork/gf/internal/crypto"
+	"github.com/ghostfork/gf/internal/logging"
 	"github.com/ghostfork/gf/internal/state"
 	"github.com/ghostfork/gf/shared/types"
 )
@@ -24,6 +26,10 @@ import (
 // Run is the entry point called from cmd/gf/main.go when the binary is
 // invoked as git-remote-gf. Git passes: git-remote-gf <remote-name> <url>
 func Run() {
+	// git invokes us directly, so we have no -v flag to honour — verbosity is
+	// controlled by GHOSTFORK_LOG_LEVEL (see internal/logging).
+	logging.SetDefault(logging.NewCLI(false))
+
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "usage: git-remote-gf <remote-name> <url>")
 		os.Exit(1)
@@ -42,6 +48,13 @@ func Run() {
 		os.Exit(1)
 	}
 
+	slog.Debug("helper start",
+		slog.String("owner", owner),
+		slog.String("repo", repo),
+		slog.String("server", cfg.ServerURL),
+		slog.String("username", cfg.Username),
+	)
+
 	h := &helper{
 		owner:  owner,
 		repo:   repo,
@@ -50,6 +63,7 @@ func Run() {
 	}
 
 	if err := h.run(os.Stdin, os.Stdout); err != nil {
+		slog.Error("helper exited with error", slog.Any("err", err))
 		fmt.Fprintf(os.Stderr, "git-remote-gf: %v\n", err)
 		os.Exit(1)
 	}
@@ -120,10 +134,12 @@ func (h *helper) run(r io.Reader, w io.Writer) error {
 // ── list ──────────────────────────────────────────────────────────────────────
 
 func (h *helper) handleList(w io.Writer) error {
+	slog.Debug("list refs", slog.String("owner", h.owner), slog.String("repo", h.repo))
 	refs, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
 		return fmt.Errorf("listing refs: %w", err)
 	}
+	slog.Debug("refs fetched", slog.Int("count", len(refs)))
 
 	for _, ref := range refs {
 		fmt.Fprintf(w, "%s refs/heads/%s\n", ref.CommitSHA, ref.Branch)
@@ -153,6 +169,10 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("loading state: %w", err)
 	}
+	slog.Debug("fetch start",
+		slog.String("git_dir", gitDir),
+		slog.Int64("last_seq", st.LastSeq),
+	)
 
 	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
 	if err != nil {
@@ -168,21 +188,28 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
+	slog.Debug("repo key decrypted")
 
 	seqs, err := h.client.ListPackfiles(h.owner, h.repo, st.LastSeq)
 	if err != nil {
 		return fmt.Errorf("listing packfiles: %w", err)
 	}
+	slog.Debug("packfiles to fetch", slog.Int("count", len(seqs)))
 
 	for _, seq := range seqs {
 		data, err := h.client.DownloadPackfile(h.owner, h.repo, seq)
 		if err != nil {
 			return fmt.Errorf("downloading packfile seq=%d: %w", seq, err)
 		}
+		slog.Debug("packfile downloaded",
+			slog.Int64("seq", seq),
+			slog.Int("encrypted_bytes", len(data)),
+		)
 
 		if err := unpackEncrypted(data, repoKey, gitDir); err != nil {
 			return fmt.Errorf("unpacking packfile seq=%d: %w", seq, err)
 		}
+		slog.Debug("packfile unpacked", slog.Int64("seq", seq))
 
 		st.LastSeq = seq
 	}
@@ -193,6 +220,7 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	if err := state.Save(gitDir, st); err != nil {
 		return fmt.Errorf("saving state: %w", err)
 	}
+	slog.Debug("fetch complete", slog.Int64("last_seq", st.LastSeq))
 
 	fmt.Fprintln(w) // blank line = fetch complete
 	return nil
@@ -236,6 +264,10 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	if err != nil {
 		return err
 	}
+	slog.Debug("push start",
+		slog.String("git_dir", gitDir),
+		slog.Int("specs", len(batch)),
+	)
 
 	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
 	if err != nil {
@@ -251,11 +283,13 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
+	slog.Debug("repo key decrypted")
 
 	serverRefs, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
 		return fmt.Errorf("getting server refs: %w", err)
 	}
+	slog.Debug("server refs fetched", slog.Int("count", len(serverRefs)))
 
 	for _, line := range batch {
 		// "push refs/heads/main:refs/heads/main" or "+refs/heads/main:refs/heads/main" (force)
@@ -297,6 +331,10 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 		return fmt.Errorf("resolving %q: %w", src, err)
 	}
 	newSHA := strings.TrimSpace(string(shaOut))
+	slog.Debug("resolved local ref",
+		slog.String("src", src),
+		slog.String("sha", newSHA),
+	)
 
 	// Build pack-objects input: include new SHA, exclude everything the server knows.
 	var revInput bytes.Buffer
@@ -317,23 +355,31 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	if err != nil {
 		return fmt.Errorf("pack-objects: %w", err)
 	}
+	slog.Debug("packfile built", slog.Int("plain_bytes", len(packData)))
 
 	// Encrypt.
 	var encrypted bytes.Buffer
 	if err := crypto.EncryptPackfile(&encrypted, bytes.NewReader(packData), repoKey); err != nil {
 		return fmt.Errorf("encrypting packfile: %w", err)
 	}
+	slog.Debug("packfile encrypted", slog.Int("encrypted_bytes", encrypted.Len()))
 
 	// Upload.
-	if _, err := h.client.UploadPackfile(h.owner, h.repo, encrypted.Bytes()); err != nil {
+	seq, err := h.client.UploadPackfile(h.owner, h.repo, encrypted.Bytes())
+	if err != nil {
 		return fmt.Errorf("uploading packfile: %w", err)
 	}
+	slog.Debug("packfile uploaded", slog.Int64("seq", seq))
 
 	// Update the remote ref tip.
 	branch := strings.TrimPrefix(dst, "refs/heads/")
 	if err := h.client.UpdateRef(h.owner, h.repo, branch, newSHA); err != nil {
 		return fmt.Errorf("updating ref: %w", err)
 	}
+	slog.Debug("remote ref updated",
+		slog.String("branch", branch),
+		slog.String("sha", newSHA),
+	)
 
 	fmt.Fprintf(w, "ok %s\n", dst)
 	return nil

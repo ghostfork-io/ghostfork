@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -166,11 +167,25 @@ func (c *Client) doJSON(method, path, apiKey string, body, out any) error {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
+	start := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
+		slog.Debug("api request failed",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Any("err", err),
+		)
 		return err
 	}
 	defer resp.Body.Close()
+
+	slog.Debug("api request",
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.Int("status", resp.StatusCode),
+		slog.Duration("latency", time.Since(start)),
+		slog.String("request_id", resp.Header.Get("X-Request-ID")),
+	)
 
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(resp.Body)
@@ -202,10 +217,24 @@ func (c *Client) doRaw(method, path, apiKey string, data []byte) (*http.Response
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
+	start := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
+		slog.Debug("api raw request failed",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Any("err", err),
+		)
 		return nil, err
 	}
+	slog.Debug("api raw request",
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.Int("status", resp.StatusCode),
+		slog.Duration("latency", time.Since(start)),
+		slog.Int("body_bytes", len(data)),
+		slog.String("request_id", resp.Header.Get("X-Request-ID")),
+	)
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()

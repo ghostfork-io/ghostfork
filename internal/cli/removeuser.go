@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 )
@@ -26,10 +27,16 @@ func runRemoveUser(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	slog.Debug("remove-user start",
+		slog.String("owner", owner),
+		slog.String("repo", repoName),
+		slog.String("target", targetUsername),
+	)
 
 	if err := sess.client.DeleteKey(owner, repoName, targetUsername); err != nil {
 		return fmt.Errorf("removing %q from %s/%s: %w", targetUsername, owner, repoName, err)
 	}
+	slog.Debug("target key deleted on server")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "%s removed from %s/%s.\n", targetUsername, owner, repoName)
 	return nil

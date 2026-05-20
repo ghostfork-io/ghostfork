@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 
 	"filippo.io/age"
 	"github.com/spf13/cobra"
@@ -33,6 +34,11 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	slog.Debug("add-user start",
+		slog.String("owner", owner),
+		slog.String("repo", repoName),
+		slog.String("target", targetUsername),
+	)
 
 	// Fetch the target user's public key from the server.
 	targetUser, err := sess.client.GetUser(targetUsername)
@@ -44,6 +50,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("parsing public key for %q: %w", targetUsername, err)
 	}
+	slog.Debug("target public key fetched")
 
 	// Fetch and decrypt our own copy of the repo key.
 	myEncKey, err := sess.client.GetKey(owner, repoName, sess.cfg.Username)
@@ -55,6 +62,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
+	slog.Debug("repo key decrypted locally")
 
 	// Re-encrypt the repo key for the target user.
 	newEncKey, err := crypto.EncryptRepoKey(repoKey, targetRecipient)
@@ -65,6 +73,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	if err := sess.client.PutKey(owner, repoName, targetUsername, newEncKey); err != nil {
 		return fmt.Errorf("storing key for %q: %w", targetUsername, err)
 	}
+	slog.Debug("wrapped repo key uploaded for target")
 
 	fmt.Fprintf(cmd.OutOrStdout(), "%s added to %s/%s.\n", targetUsername, owner, repoName)
 	return nil

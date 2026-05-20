@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 
@@ -26,6 +27,7 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	slog.Debug("init-repo start", slog.String("name", repoName), slog.String("owner", sess.cfg.Username))
 
 	repoKey, err := crypto.GenerateRepoKey()
 	if err != nil {
@@ -36,12 +38,14 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("encrypting repo key: %w", err)
 	}
+	slog.Debug("repo key generated and wrapped for owner")
 
 	// The repo owner is always the caller; the server derives it from the
 	// authenticated session, so we just pass the name.
 	if err := sess.client.CreateRepo(repoName, encKey); err != nil {
 		return fmt.Errorf("creating repo: %w", err)
 	}
+	slog.Debug("repo created on server", slog.String("name", repoName))
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Repo created. Add as a remote with:\n")
 	fmt.Fprintf(cmd.OutOrStdout(), "  git remote add origin gf://%s/%s\n", sess.cfg.Username, repoName)
