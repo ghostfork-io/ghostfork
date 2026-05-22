@@ -9,10 +9,10 @@ import (
 var verbose bool
 
 var rootCmd = &cobra.Command{
-	Use:           "gf",
-	Short:         "GhostFork — zero-trust encrypted Git remote",
-	SilenceUsage:  true,
-	SilenceErrors: true,
+	Use:               "gf",
+	Short:             "Ghostfork — zero-trust encrypted Git remote",
+	SilenceUsage:      true,
+	SilenceErrors:     true,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		logging.SetDefault(logging.NewCLI(verbose))

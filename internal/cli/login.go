@@ -14,7 +14,7 @@ import (
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Authenticate with a GhostFork server",
+	Short: "Authenticate with a Ghostfork server",
 	RunE:  runLogin,
 }
 
