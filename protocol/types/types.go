@@ -2,13 +2,13 @@ package types
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
+// RegisterRequest creates a new account. PublicKey is the user's Ed25519
+// public key (base64-std of the 32 raw bytes). The same key is used both
+// for signing API requests (see docs/auth.md) and for wrapping repo keys
+// via age (see docs/crypto.md).
 type RegisterRequest struct {
 	Username  string `json:"username"`
 	PublicKey string `json:"public_key"`
-}
-
-type RegisterResponse struct {
-	APIKey string `json:"api_key"`
 }
 
 type UserResponse struct {

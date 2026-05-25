@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"filippo.io/age"
 	"github.com/spf13/cobra"
 
 	"github.com/ghostfork/gf/internal/crypto"
+	"github.com/ghostfork/gf/shared/auth"
 )
 
 var addUserCmd = &cobra.Command{
@@ -22,10 +22,6 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 	targetUsername := args[1]
 
 	sess, err := loadSession()
-	if err != nil {
-		return err
-	}
-	id, err := loadIdentity()
 	if err != nil {
 		return err
 	}
@@ -46,7 +42,7 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching user %q: %w", targetUsername, err)
 	}
 
-	targetRecipient, err := age.ParseX25519Recipient(targetUser.PublicKey)
+	targetPub, err := auth.DecodePublicKey(targetUser.PublicKey)
 	if err != nil {
 		return fmt.Errorf("parsing public key for %q: %w", targetUsername, err)
 	}
@@ -58,14 +54,14 @@ func runAddUser(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
 
-	repoKey, err := crypto.DecryptRepoKey(myEncKey, id)
+	repoKey, err := crypto.DecryptRepoKey(myEncKey, sess.identity)
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
 	slog.Debug("repo key decrypted locally")
 
 	// Re-encrypt the repo key for the target user.
-	newEncKey, err := crypto.EncryptRepoKey(repoKey, targetRecipient)
+	newEncKey, err := crypto.EncryptRepoKey(repoKey, targetPub)
 	if err != nil {
 		return fmt.Errorf("encrypting repo key for %q: %w", targetUsername, err)
 	}

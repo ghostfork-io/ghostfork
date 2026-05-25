@@ -21,8 +21,11 @@ func TestGenerateIdentityIsValid(t *testing.T) {
 	if id == nil {
 		t.Fatal("identity is nil")
 	}
-	if id.Recipient() == nil {
-		t.Fatal("recipient is nil")
+	if len(id.PublicKey()) == 0 {
+		t.Fatal("public key is empty")
+	}
+	if len(id.Signer()) == 0 {
+		t.Fatal("signer is empty")
 	}
 }
 
@@ -32,7 +35,7 @@ func TestIdentityRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "identity.age")
+	path := filepath.Join(t.TempDir(), "identity.ed25519")
 	if err := crypto.SaveIdentity(path, id); err != nil {
 		t.Fatal(err)
 	}
@@ -49,15 +52,18 @@ func TestIdentityRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Recipient().String() != id.Recipient().String() {
+	if !bytes.Equal(loaded.PublicKey(), id.PublicKey()) {
 		t.Fatal("public key mismatch after round trip")
+	}
+	if !bytes.Equal(loaded.Signer(), id.Signer()) {
+		t.Fatal("private key mismatch after round trip")
 	}
 }
 
 func TestTwoIdentitiesAreDistinct(t *testing.T) {
 	a, _ := crypto.GenerateIdentity()
 	b, _ := crypto.GenerateIdentity()
-	if a.String() == b.String() {
+	if bytes.Equal(a.Signer(), b.Signer()) {
 		t.Fatal("two generated identities are identical")
 	}
 }
@@ -86,7 +92,7 @@ func TestRepoKeyEncryptDecryptRoundTrip(t *testing.T) {
 	id, _ := crypto.GenerateIdentity()
 	repoKey, _ := crypto.GenerateRepoKey()
 
-	ct, err := crypto.EncryptRepoKey(repoKey, id.Recipient())
+	ct, err := crypto.EncryptRepoKey(repoKey, id.PublicKey())
 	if err != nil {
 		t.Fatal("encrypt:", err)
 	}
@@ -105,7 +111,7 @@ func TestRepoKeyWrongIdentityFails(t *testing.T) {
 	idB, _ := crypto.GenerateIdentity()
 	repoKey, _ := crypto.GenerateRepoKey()
 
-	ct, _ := crypto.EncryptRepoKey(repoKey, idA.Recipient())
+	ct, _ := crypto.EncryptRepoKey(repoKey, idA.PublicKey())
 	_, err := crypto.DecryptRepoKey(ct, idB)
 	if err == nil {
 		t.Fatal("expected error decrypting with wrong identity, got nil")

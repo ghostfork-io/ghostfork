@@ -4,41 +4,35 @@ import (
 	"fmt"
 	"strings"
 
-	"filippo.io/age"
-
 	"github.com/ghostfork/gf/internal/apiclient"
 	"github.com/ghostfork/gf/internal/config"
 	"github.com/ghostfork/gf/internal/crypto"
 )
 
 // session is the per-invocation context every authenticated CLI command
-// shares: loaded config plus a ready-to-use API client.
+// shares: loaded config, loaded identity, and a ready-to-use signed API client.
 type session struct {
-	cfg    *config.Config
-	client *apiclient.Client
+	cfg      *config.Config
+	identity *crypto.Identity
+	client   *apiclient.Client
 }
 
-// loadSession reads the saved config and constructs the API client. Returns
-// a clear error when the user has not yet run gf login.
+// loadSession reads the saved config and identity and constructs a signed
+// API client. Returns a clear error when the user has not yet run gf login.
 func loadSession() (*session, error) {
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		return nil, fmt.Errorf("not logged in — run 'gf login' first (%w)", err)
 	}
-	return &session{
-		cfg:    cfg,
-		client: apiclient.New(cfg.ServerURL, cfg.APIKey),
-	}, nil
-}
-
-// loadIdentity reads the user's age private key from the default location,
-// wrapping the error so the CLI surface stays consistent.
-func loadIdentity() (*age.X25519Identity, error) {
 	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
 	if err != nil {
 		return nil, fmt.Errorf("loading identity: %w", err)
 	}
-	return id, nil
+	return &session{
+		cfg:      cfg,
+		identity: id,
+		client:   apiclient.NewAuthenticated(cfg.ServerURL, cfg.Username, id.Signer()),
+	}, nil
 }
 
 // parseRepoArg accepts either "reponame" or "owner/reponame". When no owner is

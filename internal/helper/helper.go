@@ -47,6 +47,11 @@ func Run() {
 		fmt.Fprintf(os.Stderr, "git-remote-gf: not logged in — run 'gf login' first\n")
 		os.Exit(1)
 	}
+	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git-remote-gf: loading identity: %v\n", err)
+		os.Exit(1)
+	}
 
 	slog.Debug("helper start",
 		slog.String("owner", owner),
@@ -56,10 +61,11 @@ func Run() {
 	)
 
 	h := &helper{
-		owner:  owner,
-		repo:   repo,
-		cfg:    cfg,
-		client: apiclient.New(cfg.ServerURL, cfg.APIKey),
+		owner:    owner,
+		repo:     repo,
+		cfg:      cfg,
+		identity: id,
+		client:   apiclient.NewAuthenticated(cfg.ServerURL, cfg.Username, id.Signer()),
 	}
 
 	if err := h.run(os.Stdin, os.Stdout); err != nil {
@@ -70,10 +76,11 @@ func Run() {
 }
 
 type helper struct {
-	owner  string
-	repo   string
-	cfg    *config.Config
-	client *apiclient.Client
+	owner    string
+	repo     string
+	cfg      *config.Config
+	identity *crypto.Identity
+	client   *apiclient.Client
 }
 
 // run drives the line-protocol loop with git over r/w.
@@ -174,17 +181,12 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 		slog.Int64("last_seq", st.LastSeq),
 	)
 
-	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
-	if err != nil {
-		return fmt.Errorf("loading identity: %w", err)
-	}
-
 	encKey, err := h.client.GetKey(h.owner, h.repo, h.cfg.Username)
 	if err != nil {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
 
-	repoKey, err := crypto.DecryptRepoKey(encKey, id)
+	repoKey, err := crypto.DecryptRepoKey(encKey, h.identity)
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
@@ -269,17 +271,12 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		slog.Int("specs", len(batch)),
 	)
 
-	id, err := crypto.LoadIdentity(config.DefaultIdentityPath())
-	if err != nil {
-		return fmt.Errorf("loading identity: %w", err)
-	}
-
 	encKey, err := h.client.GetKey(h.owner, h.repo, h.cfg.Username)
 	if err != nil {
 		return fmt.Errorf("fetching repo key: %w", err)
 	}
 
-	repoKey, err := crypto.DecryptRepoKey(encKey, id)
+	repoKey, err := crypto.DecryptRepoKey(encKey, h.identity)
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}

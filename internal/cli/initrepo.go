@@ -23,10 +23,6 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	id, err := loadIdentity()
-	if err != nil {
-		return err
-	}
 	slog.Debug("init-repo start", slog.String("name", repoName), slog.String("owner", sess.cfg.Username))
 
 	repoKey, err := crypto.GenerateRepoKey()
@@ -34,7 +30,7 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generating repo key: %w", err)
 	}
 
-	encKey, err := crypto.EncryptRepoKey(repoKey, id.Recipient())
+	encKey, err := crypto.EncryptRepoKey(repoKey, sess.identity.PublicKey())
 	if err != nil {
 		return fmt.Errorf("encrypting repo key: %w", err)
 	}

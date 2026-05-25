@@ -2,6 +2,9 @@ package apiclient_test
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"testing"
 
 	"github.com/ghostfork/gf/internal/apiclient"
@@ -10,15 +13,25 @@ import (
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// registered returns an authenticated client for a freshly registered user.
+// newIdentity returns a fresh Ed25519 keypair for test use.
+func newIdentity(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate identity: %v", err)
+	}
+	return pub, priv
+}
+
+// registered registers a user against ts and returns an authenticated client.
 func registered(t *testing.T, ts *testserver.TestServer, username string) *apiclient.Client {
 	t.Helper()
-	anon := apiclient.New(ts.URL, "")
-	apiKey, err := anon.Register(username, "age1fakepublickey"+username)
-	if err != nil {
+	pub, priv := newIdentity(t)
+	anon := apiclient.New(ts.URL)
+	if err := anon.Register(username, base64.StdEncoding.EncodeToString(pub)); err != nil {
 		t.Fatalf("register %s: %v", username, err)
 	}
-	return apiclient.New(ts.URL, apiKey)
+	return apiclient.NewAuthenticated(ts.URL, username, priv)
 }
 
 // withRepo registers a user, creates a repo, and returns the client. The repo
@@ -34,27 +47,26 @@ func withRepo(t *testing.T, ts *testserver.TestServer, username, name string) *a
 
 // ── Register ──────────────────────────────────────────────────────────────────
 
-func TestRegisterReturnsAPIKey(t *testing.T) {
+func TestRegisterSucceeds(t *testing.T) {
 	ts := testserver.Start(t)
-	anon := apiclient.New(ts.URL, "")
+	anon := apiclient.New(ts.URL)
+	pub, _ := newIdentity(t)
 
-	apiKey, err := anon.Register("alice", "age1fakepublickey")
-	if err != nil {
+	if err := anon.Register("alice", base64.StdEncoding.EncodeToString(pub)); err != nil {
 		t.Fatal(err)
-	}
-	if apiKey == "" {
-		t.Fatal("expected non-empty api key")
 	}
 }
 
 func TestRegisterDuplicateReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
-	anon := apiclient.New(ts.URL, "")
+	anon := apiclient.New(ts.URL)
+	pub, _ := newIdentity(t)
+	encoded := base64.StdEncoding.EncodeToString(pub)
 
-	if _, err := anon.Register("alice", "age1key"); err != nil {
+	if err := anon.Register("alice", encoded); err != nil {
 		t.Fatal(err)
 	}
-	_, err := anon.Register("alice", "age1key")
+	err := anon.Register("alice", encoded)
 	if err == nil {
 		t.Fatal("expected error registering duplicate username, got nil")
 	}
@@ -303,25 +315,26 @@ func TestDeleteKey(t *testing.T) {
 
 // ── Auth / authz errors ───────────────────────────────────────────────────────
 
-func TestWrongAPIKeyReturnsError(t *testing.T) {
+func TestWrongSignerReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
-	registered(t, ts, "alice") // registers alice, creates a server-side user
+	registered(t, ts, "alice") // alice exists, but we'll try a bogus key
 
-	bad := apiclient.New(ts.URL, "not-a-real-token")
+	_, bogusPriv := newIdentity(t)
+	bad := apiclient.NewAuthenticated(ts.URL, "alice", bogusPriv)
 	_, err := bad.GetUser("alice")
 	if err == nil {
-		t.Fatal("expected error for invalid token, got nil")
+		t.Fatal("expected error when signing with a key that doesn't match alice's stored pubkey")
 	}
 }
 
-func TestNoAPIKeyReturnsError(t *testing.T) {
+func TestUnauthenticatedReturnsError(t *testing.T) {
 	ts := testserver.Start(t)
 	registered(t, ts, "alice")
 
-	noAuth := apiclient.New(ts.URL, "")
-	_, err := noAuth.GetUser("alice")
+	anon := apiclient.New(ts.URL)
+	_, err := anon.GetUser("alice")
 	if err == nil {
-		t.Fatal("expected error for missing token, got nil")
+		t.Fatal("expected error for unauthenticated GetUser, got nil")
 	}
 }
 

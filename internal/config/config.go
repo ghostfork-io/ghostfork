@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,11 +11,20 @@ import (
 	"github.com/ghostfork/gf/internal/atomicfile"
 )
 
-// Config holds the user's persistent client configuration.
+// Config holds the user's persistent client configuration. Note that the
+// signing private key lives in a separate file (DefaultIdentityPath); this
+// file never contains secret material.
 type Config struct {
 	Username  string `toml:"username"`
-	APIKey    string `toml:"api_key"`
 	ServerURL string `toml:"server_url"`
+}
+
+// rawConfig is used to detect old-format files that still hold an api_key.
+// We refuse to load such files and direct the user to re-run gf login.
+type rawConfig struct {
+	Username  string `toml:"username"`
+	ServerURL string `toml:"server_url"`
+	APIKey    string `toml:"api_key"`
 }
 
 // DefaultPath returns the path to the config file.
@@ -33,29 +43,34 @@ func DefaultPath() string {
 	return filepath.Join(dir, "gf", "config")
 }
 
-// DefaultIdentityPath returns the path to the age private key file.
-// Overridable via GF_IDENTITY env var. The os.UserConfigDir error is
-// dropped for the same reason as DefaultPath.
+// DefaultIdentityPath returns the path to the Ed25519 identity file.
+// Overridable via GF_IDENTITY env var.
 func DefaultIdentityPath() string {
 	if p := os.Getenv("GF_IDENTITY"); p != "" {
 		return p
 	}
 	dir, _ := os.UserConfigDir()
-	return filepath.Join(dir, "gf", "identity.age")
+	return filepath.Join(dir, "gf", "identity.ed25519")
 }
 
-// Load reads and parses the config file at path.
+// Load reads and parses the config file at path. Refuses old api_key-based
+// configs with a clear error so the user knows to wipe state and re-login.
 func Load(path string) (*Config, error) {
-	var c Config
-	if _, err := toml.DecodeFile(path, &c); err != nil {
+	var raw rawConfig
+	if _, err := toml.DecodeFile(path, &raw); err != nil {
 		return nil, err
 	}
-	return &c, nil
+	if raw.APIKey != "" {
+		return nil, fmt.Errorf(
+			"config at %s is from a pre-signature build (contains api_key).\n"+
+				"Delete the gf config directory and run 'gf login' again to migrate", path)
+	}
+	return &Config{Username: raw.Username, ServerURL: raw.ServerURL}, nil
 }
 
 // Save writes cfg to path atomically in TOML format, creating parent
-// directories as needed. A crash or encode error never corrupts an existing
-// config file — important because the file holds the user's API key.
+// directories as needed. The config holds no secret material, but a crash
+// or encode error still must not corrupt the existing file.
 func Save(path string, cfg *Config) error {
 	return atomicfile.Write(path, 0600, func(w io.Writer) error {
 		return toml.NewEncoder(w).Encode(cfg)

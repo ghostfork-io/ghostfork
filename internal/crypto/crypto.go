@@ -2,7 +2,9 @@ package crypto
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -11,33 +13,73 @@ import (
 	"strings"
 
 	"filippo.io/age"
+	"filippo.io/age/agessh"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/ssh"
 )
 
 // chunkSize is the plaintext size of each encrypted chunk in a packfile.
 const chunkSize = 64 * 1024 // 64 KiB
 
-// GenerateIdentity creates a new age X25519 keypair.
-func GenerateIdentity() (*age.X25519Identity, error) {
-	return age.GenerateX25519Identity()
+// Identity is a user's Ed25519 keypair. The same key is used both for
+// signing API requests (see shared/auth) and for wrapping per-repo
+// encryption keys via age's SSH-key compatibility (see docs/crypto.md).
+type Identity struct {
+	priv ed25519.PrivateKey
 }
 
-// SaveIdentity writes id to path with permissions 0600.
-// The parent directory is created if it does not exist.
-func SaveIdentity(path string, id *age.X25519Identity) error {
+// GenerateIdentity creates a new Ed25519 keypair.
+func GenerateIdentity() (*Identity, error) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating ed25519 key: %w", err)
+	}
+	return &Identity{priv: priv}, nil
+}
+
+// PublicKey returns the raw Ed25519 public key. Suitable for ed25519.Verify
+// and for passing to EncryptRepoKey.
+func (id *Identity) PublicKey() ed25519.PublicKey {
+	return id.priv.Public().(ed25519.PublicKey)
+}
+
+// Signer returns the underlying private key for use with ed25519.Sign and
+// shared/auth.SignRequest. The caller must not modify the returned slice.
+func (id *Identity) Signer() ed25519.PrivateKey {
+	return id.priv
+}
+
+// PublicKeyString returns the wire/storage encoding of the public key
+// (base64-std of the 32 raw bytes).
+func (id *Identity) PublicKeyString() string {
+	return base64.StdEncoding.EncodeToString(id.PublicKey())
+}
+
+// SaveIdentity writes id to path with permissions 0600. The on-disk format
+// is the base64-std encoding of the 32-byte Ed25519 seed plus a trailing
+// newline — a single short line, mirroring the old age identity file.
+func SaveIdentity(path string, id *Identity) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(id.String()+"\n"), 0600)
+	encoded := base64.StdEncoding.EncodeToString(id.priv.Seed())
+	return os.WriteFile(path, []byte(encoded+"\n"), 0600)
 }
 
-// LoadIdentity reads an age X25519 identity from path.
-func LoadIdentity(path string) (*age.X25519Identity, error) {
+// LoadIdentity reads an Ed25519 identity from path.
+func LoadIdentity(path string) (*Identity, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return age.ParseX25519Identity(strings.TrimSpace(string(data)))
+	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil {
+		return nil, fmt.Errorf("decoding identity: %w", err)
+	}
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("identity has %d-byte seed, want %d", len(seed), ed25519.SeedSize)
+	}
+	return &Identity{priv: ed25519.NewKeyFromSeed(seed)}, nil
 }
 
 // GenerateRepoKey returns 32 cryptographically random bytes for use as a repo encryption key.
@@ -47,11 +89,15 @@ func GenerateRepoKey() ([]byte, error) {
 	return key, err
 }
 
-// EncryptRepoKey encrypts the 32-byte repoKey for recipient using age X25519.
-// The result is safe to store on the server.
-func EncryptRepoKey(repoKey []byte, recipient *age.X25519Recipient) ([]byte, error) {
+// EncryptRepoKey encrypts the 32-byte repoKey to recipient using age via the
+// agessh adapter. The result is safe to store on the server.
+func EncryptRepoKey(repoKey []byte, recipient ed25519.PublicKey) ([]byte, error) {
+	r, err := ageRecipient(recipient)
+	if err != nil {
+		return nil, err
+	}
 	var buf bytes.Buffer
-	w, err := age.Encrypt(&buf, recipient)
+	w, err := age.Encrypt(&buf, r)
 	if err != nil {
 		return nil, err
 	}
@@ -64,13 +110,32 @@ func EncryptRepoKey(repoKey []byte, recipient *age.X25519Recipient) ([]byte, err
 	return buf.Bytes(), nil
 }
 
-// DecryptRepoKey decrypts an encrypted repo key using the given age identity.
-func DecryptRepoKey(ciphertext []byte, id *age.X25519Identity) ([]byte, error) {
-	r, err := age.Decrypt(bytes.NewReader(ciphertext), id)
+// DecryptRepoKey decrypts an encrypted repo key using id's Ed25519 key.
+func DecryptRepoKey(ciphertext []byte, id *Identity) ([]byte, error) {
+	identity, err := agessh.NewEd25519Identity(id.priv)
+	if err != nil {
+		return nil, fmt.Errorf("agessh identity: %w", err)
+	}
+	r, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
 	if err != nil {
 		return nil, err
 	}
 	return io.ReadAll(r)
+}
+
+// ageRecipient wraps an Ed25519 public key as an age recipient via SSH-style
+// conversion. agessh's recipient constructor requires an ssh.PublicKey, so
+// we first marshal the raw Ed25519 key through golang.org/x/crypto/ssh.
+func ageRecipient(pub ed25519.PublicKey) (age.Recipient, error) {
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		return nil, fmt.Errorf("ssh.NewPublicKey: %w", err)
+	}
+	r, err := agessh.NewEd25519Recipient(sshPub)
+	if err != nil {
+		return nil, fmt.Errorf("agessh recipient: %w", err)
+	}
+	return r, nil
 }
 
 // EncryptPackfile encrypts src to dst using XChaCha20-Poly1305 with repoKey.

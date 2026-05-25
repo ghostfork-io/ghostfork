@@ -45,15 +45,14 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	if _, err := os.Stat(identityPath); err == nil {
 		cfg, cfgErr := config.Load(cfgPath)
 		if cfgErr != nil {
-			// Identity present but no usable config: the API key for the
-			// previous account is unrecoverable in V1 (see CLAUDE.md threat
-			// model on key loss). Refuse rather than silently re-register a
-			// second server account against the same public key.
+			// Identity present but no usable config: the previous account on
+			// this key is unrecoverable (see CLAUDE.md threat model on key
+			// loss). Refuse rather than silently re-register a second server
+			// account against the same public key.
 			return fmt.Errorf(
 				"identity file already exists at %s but no usable config was found.\n"+
-					"The API key for the previous account on this identity cannot be\n"+
-					"recovered in V1. To start fresh with a new identity, delete\n"+
-					"%s and run gf login again",
+					"The previous account on this identity cannot be recovered in V1.\n"+
+					"To start fresh with a new identity, delete %s and run gf login again",
 				identityPath, identityPath)
 		}
 		if cfg.Username == username && cfg.ServerURL == serverURL {
@@ -77,12 +76,10 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	slog.Debug("registering with server", slog.String("server", serverURL))
-	client := apiclient.New(serverURL, "")
-	apiKey, err := client.Register(username, id.Recipient().String())
-	if err != nil {
+	client := apiclient.New(serverURL)
+	if err := client.Register(username, id.PublicKeyString()); err != nil {
 		return fmt.Errorf("registering with server: %w", err)
 	}
-	// NEVER include apiKey in logs — it is a bearer credential.
 	slog.Debug("server registration complete")
 
 	if err := crypto.SaveIdentity(identityPath, id); err != nil {
@@ -91,7 +88,6 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 
 	cfg := &config.Config{
 		Username:  username,
-		APIKey:    apiKey,
 		ServerURL: serverURL,
 	}
 	if err := config.Save(cfgPath, cfg); err != nil {

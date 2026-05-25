@@ -35,7 +35,7 @@ func TestDefaultPathFallsBackToUserConfigDir(t *testing.T) {
 // ── DefaultIdentityPath ───────────────────────────────────────────────────────
 
 func TestDefaultIdentityPathUsesGFIDENTITYEnvVar(t *testing.T) {
-	expected := "/tmp/custom/gf/identity.age"
+	expected := "/tmp/custom/gf/identity.ed25519"
 	t.Setenv("GF_IDENTITY", expected)
 
 	if got := config.DefaultIdentityPath(); got != expected {
@@ -50,8 +50,8 @@ func TestDefaultIdentityPathFallsBackToUserConfigDir(t *testing.T) {
 	if got == "" {
 		t.Fatal("expected non-empty default identity path")
 	}
-	if filepath.Base(got) != "identity.age" {
-		t.Fatalf("expected filename to be 'identity.age', got %q", filepath.Base(got))
+	if filepath.Base(got) != "identity.ed25519" {
+		t.Fatalf("expected filename to be 'identity.ed25519', got %q", filepath.Base(got))
 	}
 }
 
@@ -62,7 +62,6 @@ func TestConfigSaveCreatesParentDir(t *testing.T) {
 
 	err := config.Save(path, &config.Config{
 		Username:  "alice",
-		APIKey:    "key123",
 		ServerURL: "https://api.gf.dev",
 	})
 	if err != nil {
@@ -78,7 +77,6 @@ func TestConfigSaveWritesAllFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	cfg := &config.Config{
 		Username:  "alice",
-		APIKey:    "secretkey",
 		ServerURL: "https://api.gf.dev",
 	}
 
@@ -91,7 +89,7 @@ func TestConfigSaveWritesAllFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	content := string(raw)
-	for _, want := range []string{"alice", "secretkey", "https://api.gf.dev"} {
+	for _, want := range []string{"alice", "https://api.gf.dev"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("saved file missing %q\nfile content:\n%s", want, content)
 		}
@@ -107,11 +105,29 @@ func TestConfigLoadMissingFileReturnsError(t *testing.T) {
 	}
 }
 
+func TestConfigLoadRefusesOldAPIKeyFormat(t *testing.T) {
+	// Pre-signature configs included api_key; they must not silently load
+	// because the identity that authenticated them is gone.
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path,
+		[]byte("username = \"alice\"\nserver_url = \"https://example\"\napi_key = \"old-token\"\n"),
+		0600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("expected error for legacy api_key config, got nil")
+	}
+	if !strings.Contains(err.Error(), "api_key") {
+		t.Fatalf("expected error to mention api_key, got: %v", err)
+	}
+}
+
 func TestConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 	original := &config.Config{
 		Username:  "alice",
-		APIKey:    "myapikey",
 		ServerURL: "https://api.gf.dev",
 	}
 
@@ -127,9 +143,6 @@ func TestConfigRoundTrip(t *testing.T) {
 	if loaded.Username != original.Username {
 		t.Errorf("Username: got %q, want %q", loaded.Username, original.Username)
 	}
-	if loaded.APIKey != original.APIKey {
-		t.Errorf("APIKey: got %q, want %q", loaded.APIKey, original.APIKey)
-	}
 	if loaded.ServerURL != original.ServerURL {
 		t.Errorf("ServerURL: got %q, want %q", loaded.ServerURL, original.ServerURL)
 	}
@@ -138,14 +151,14 @@ func TestConfigRoundTrip(t *testing.T) {
 func TestConfigSaveOverwritesExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 
-	config.Save(path, &config.Config{Username: "alice", APIKey: "old"}) //nolint:errcheck
-	config.Save(path, &config.Config{Username: "alice", APIKey: "new"}) //nolint:errcheck
+	config.Save(path, &config.Config{Username: "alice", ServerURL: "old"})         //nolint:errcheck
+	config.Save(path, &config.Config{Username: "alice", ServerURL: "new-server"}) //nolint:errcheck
 
 	loaded, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.APIKey != "new" {
-		t.Fatalf("expected APIKey=new after overwrite, got %q", loaded.APIKey)
+	if loaded.ServerURL != "new-server" {
+		t.Fatalf("expected ServerURL=new-server after overwrite, got %q", loaded.ServerURL)
 	}
 }
