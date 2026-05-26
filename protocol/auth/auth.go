@@ -87,6 +87,17 @@ func DecodePublicKey(s string) (ed25519.PublicKey, error) {
 // that will be sent as the request body (nil for empty body). The caller is
 // responsible for sending those same bytes.
 func SignRequest(req *http.Request, body []byte, username string, signer ed25519.PrivateKey) {
+	SignRequestPrehashed(req, HashBody(body), username, signer)
+}
+
+// SignRequestPrehashed is the streaming variant of SignRequest. The caller
+// passes the hex SHA-256 it computed while building the request body (for
+// example, while tee-ing pack-objects output through an encrypting writer to
+// a temp file). The body is not seen by this function.
+//
+// If the bytes actually sent on the wire do not hash to bodyHashHex, the
+// server's body-hash check will reject the request with 401.
+func SignRequestPrehashed(req *http.Request, bodyHashHex, username string, signer ed25519.PrivateKey) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 	nonceBytes := make([]byte, NonceSize)
 	if _, err := rand.Read(nonceBytes); err != nil {
@@ -95,14 +106,13 @@ func SignRequest(req *http.Request, body []byte, username string, signer ed25519
 		panic(fmt.Sprintf("auth: crypto/rand failure: %v", err))
 	}
 	nonce := base64.StdEncoding.EncodeToString(nonceBytes)
-	bodyHash := HashBody(body)
-	msg := Canonical(req.Method, req.URL.RequestURI(), ts, nonce, bodyHash)
+	msg := Canonical(req.Method, req.URL.RequestURI(), ts, nonce, bodyHashHex)
 	sig := ed25519.Sign(signer, msg)
 
 	req.Header.Set(HeaderUser, username)
 	req.Header.Set(HeaderTimestamp, ts)
 	req.Header.Set(HeaderNonce, nonce)
-	req.Header.Set(HeaderBodyHash, bodyHash)
+	req.Header.Set(HeaderBodyHash, bodyHashHex)
 	req.Header.Set(HeaderSignature, base64.StdEncoding.EncodeToString(sig))
 }
 
@@ -115,15 +125,25 @@ type VerifiedRequest struct {
 	Nonce     string
 }
 
-// VerifyRequest checks the headers on req against body and pub. Returns the
-// verified envelope on success. Caller is responsible for:
-//  1. Resolving Username → public key before calling (passed in as pub).
-//  2. Running (Username, Nonce) through a replay cache after a successful
-//     return. VerifyRequest itself is stateless.
+// VerifiedEnvelope is the streaming counterpart to VerifiedRequest. It is
+// returned by VerifyEnvelope before the body has been read, so it carries
+// the body hash the client claimed in the header. The caller must compute
+// the actual body hash and reject the request if it does not match.
+type VerifiedEnvelope struct {
+	VerifiedRequest
+	ClaimedBodyHash string // lowercase hex SHA-256
+}
+
+// VerifyEnvelope checks every field of the signed envelope EXCEPT the
+// agreement between the claimed body hash and the bytes actually received.
+// It is the streaming-safe entry point: a server may call this before the
+// body has finished arriving, then verify the body hash against the result
+// of streaming the body through a sha256.Hash.
 //
-// All failures collapse to one of the package's sentinel errors; the server
-// should not distinguish them in its response to the client.
-func VerifyRequest(req *http.Request, body []byte, pub ed25519.PublicKey) (*VerifiedRequest, error) {
+// Until the body hash has been confirmed, the request body must not be
+// trusted. Specifically: bytes already written to storage must be rolled
+// back if the final hash check fails.
+func VerifyEnvelope(req *http.Request, pub ed25519.PublicKey) (*VerifiedEnvelope, error) {
 	user := req.Header.Get(HeaderUser)
 	tsStr := req.Header.Get(HeaderTimestamp)
 	nonce := req.Header.Get(HeaderNonce)
@@ -147,13 +167,6 @@ func VerifyRequest(req *http.Request, body []byte, pub ed25519.PublicKey) (*Veri
 		return nil, ErrBadNonce
 	}
 
-	// Verify the body hash matches what was actually received. Without this
-	// check, an attacker could swap the body while the signature stays valid
-	// because the signature only commits to the header value, not the body.
-	if bodyHashHdr != HashBody(body) {
-		return nil, ErrBadBodyHash
-	}
-
 	sig, err := base64.StdEncoding.DecodeString(sigB64)
 	if err != nil || len(sig) != ed25519.SignatureSize {
 		return nil, ErrBadSignature
@@ -164,5 +177,30 @@ func VerifyRequest(req *http.Request, body []byte, pub ed25519.PublicKey) (*Veri
 		return nil, ErrBadSignature
 	}
 
-	return &VerifiedRequest{Username: user, Timestamp: ts, Nonce: nonce}, nil
+	return &VerifiedEnvelope{
+		VerifiedRequest: VerifiedRequest{Username: user, Timestamp: ts, Nonce: nonce},
+		ClaimedBodyHash: bodyHashHdr,
+	}, nil
+}
+
+// VerifyRequest checks the headers on req against body and pub. Returns the
+// verified envelope on success. Caller is responsible for:
+//  1. Resolving Username → public key before calling (passed in as pub).
+//  2. Running (Username, Nonce) through a replay cache after a successful
+//     return. VerifyRequest itself is stateless.
+//
+// All failures collapse to one of the package's sentinel errors; the server
+// should not distinguish them in its response to the client.
+func VerifyRequest(req *http.Request, body []byte, pub ed25519.PublicKey) (*VerifiedRequest, error) {
+	env, err := VerifyEnvelope(req, pub)
+	if err != nil {
+		return nil, err
+	}
+	// Verify the body hash matches what was actually received. Without this
+	// check, an attacker could swap the body while the signature stays valid
+	// because the signature only commits to the header value, not the body.
+	if env.ClaimedBodyHash != HashBody(body) {
+		return nil, ErrBadBodyHash
+	}
+	return &env.VerifiedRequest, nil
 }

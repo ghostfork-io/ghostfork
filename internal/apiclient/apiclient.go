@@ -16,9 +16,11 @@ import (
 	"github.com/ghostfork/gf/shared/types"
 )
 
-// maxDownloadSize is the largest packfile blob the client will read (600 MiB,
-// slightly above the server's 512 MiB limit to account for encryption overhead).
-const maxDownloadSize = 600 << 20
+// jsonRequestTimeout caps short, body-buffered API calls (refs, keys, repo
+// creation). Packfile upload and download skip this timeout because they
+// stream multi-GiB bodies — there is no sensible single-call ceiling for
+// those.
+const jsonRequestTimeout = 60 * time.Second
 
 // Client is a typed HTTP client for the gfserver API. An empty username +
 // nil signer means an unauthenticated client; only Register may be called.
@@ -26,24 +28,30 @@ type Client struct {
 	BaseURL  string
 	username string
 	signer   ed25519.PrivateKey
-	http     *http.Client
+	// http is used for short JSON calls with a request timeout.
+	http *http.Client
+	// streamHTTP is used for packfile upload/download. No request timeout —
+	// streaming pushes/fetches can legitimately take hours on large repos.
+	streamHTTP *http.Client
 }
 
 // New creates an unauthenticated client. Only Register may be called.
 func New(baseURL string) *Client {
 	return &Client{
-		BaseURL: baseURL,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		BaseURL:    baseURL,
+		http:       &http.Client{Timeout: jsonRequestTimeout},
+		streamHTTP: &http.Client{},
 	}
 }
 
 // NewAuthenticated creates a client that signs every request as username.
 func NewAuthenticated(baseURL, username string, signer ed25519.PrivateKey) *Client {
 	return &Client{
-		BaseURL:  baseURL,
-		username: username,
-		signer:   signer,
-		http:     &http.Client{Timeout: 60 * time.Second},
+		BaseURL:    baseURL,
+		username:   username,
+		signer:     signer,
+		http:       &http.Client{Timeout: jsonRequestTimeout},
+		streamHTTP: &http.Client{},
 	}
 }
 
@@ -96,13 +104,33 @@ func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 
 // ── Packfiles ─────────────────────────────────────────────────────────────────
 
-// UploadPackfile stores an encrypted packfile blob and returns its sequence number.
-func (c *Client) UploadPackfile(owner, repo string, data []byte) (int64, error) {
-	resp, err := c.doRaw(http.MethodPost, repoPath(owner, repo)+"/packfiles", data)
+// UploadPackfile streams an encrypted packfile to the server and returns the
+// assigned sequence number. body is the encrypted packfile contents, size is
+// the exact byte count (so Content-Length can be set), and bodyHashHex is the
+// SHA-256 of those bytes (lowercase hex). The caller computes the hash while
+// it writes the body — typically by tee-ing the encrypted stream into a temp
+// file through a sha256.Hash.
+//
+// If the bytes sent on the wire do not match bodyHashHex the server rejects
+// with 401 (returned here as a generic HTTP error).
+func (c *Client) UploadPackfile(owner, repo string, body io.Reader, size int64, bodyHashHex string) (int64, error) {
+	req, err := http.NewRequest(http.MethodPost, c.BaseURL+repoPath(owner, repo)+"/packfiles", body)
+	if err != nil {
+		return 0, err
+	}
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/octet-stream")
+	c.signPrehashed(req, bodyHashHex)
+
+	resp, err := c.doStream(req, http.MethodPost, repoPath(owner, repo)+"/packfiles")
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+	}
 	var up types.UploadPackfileResponse
 	if err := json.NewDecoder(resp.Body).Decode(&up); err != nil {
 		return 0, err
@@ -124,15 +152,27 @@ func (c *Client) ListPackfiles(owner, repo string, afterSeq int64) ([]int64, err
 	return seqs, nil
 }
 
-// DownloadPackfile fetches the raw bytes of one packfile by sequence number.
-func (c *Client) DownloadPackfile(owner, repo string, seq int64) ([]byte, error) {
+// DownloadPackfile streams one packfile's encrypted bytes. The caller MUST
+// Close the returned reader. The caller is responsible for piping the bytes
+// through DecryptPackfile and on into git's index-pack.
+func (c *Client) DownloadPackfile(owner, repo string, seq int64) (io.ReadCloser, error) {
 	path := repoPath(owner, repo) + "/packfiles/" + strconv.FormatInt(seq, 10)
-	resp, err := c.doRaw(http.MethodGet, path, nil)
+	req, err := http.NewRequest(http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	return io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
+	c.signPrehashed(req, auth.HashBody(nil))
+
+	resp, err := c.doStream(req, http.MethodGet, path)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+	}
+	return resp.Body, nil
 }
 
 // ── Keys ──────────────────────────────────────────────────────────────────────
@@ -194,31 +234,6 @@ func (c *Client) doJSON(method, path string, body, out any) error {
 	return nil
 }
 
-// doRaw performs a request with a raw octet-stream body and returns the response
-// for the caller to read. The caller is responsible for closing resp.Body.
-// Non-2xx responses are returned as errors.
-func (c *Client) doRaw(method, path string, data []byte) (*http.Response, error) {
-	req, err := http.NewRequest(method, c.BaseURL+path, bytesReader(data))
-	if err != nil {
-		return nil, err
-	}
-	if data != nil {
-		req.Header.Set("Content-Type", "application/octet-stream")
-	}
-	c.sign(req, data)
-
-	resp, err := c.do(req, method, path)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
-	}
-	return resp, nil
-}
-
 // sign attaches the auth envelope to req when the client has an identity.
 // For unauthenticated clients (Register only) it is a no-op.
 func (c *Client) sign(req *http.Request, body []byte) {
@@ -229,6 +244,39 @@ func (c *Client) sign(req *http.Request, body []byte) {
 		body = []byte{}
 	}
 	auth.SignRequest(req, body, c.username, c.signer)
+}
+
+// signPrehashed is the streaming counterpart to sign: the caller has already
+// computed the SHA-256 of the body bytes it will send. No-op when the client
+// has no identity.
+func (c *Client) signPrehashed(req *http.Request, bodyHashHex string) {
+	if c.username == "" || c.signer == nil {
+		return
+	}
+	auth.SignRequestPrehashed(req, bodyHashHex, c.username, c.signer)
+}
+
+// doStream is the no-timeout counterpart to do, used for packfile streams.
+// It emits the same debug log line as do.
+func (c *Client) doStream(req *http.Request, method, path string) (*http.Response, error) {
+	start := time.Now()
+	resp, err := c.streamHTTP.Do(req)
+	if err != nil {
+		slog.Debug("api stream request failed",
+			slog.String("method", method),
+			slog.String("path", path),
+			slog.Any("err", err),
+		)
+		return nil, err
+	}
+	slog.Debug("api stream request",
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.Int("status", resp.StatusCode),
+		slog.Duration("latency", time.Since(start)),
+		slog.String("request_id", resp.Header.Get("X-Request-ID")),
+	)
+	return resp, nil
 }
 
 // do executes req and emits a debug log line. The body-bytes count is taken

@@ -94,6 +94,75 @@ func TestSignAndVerifyWithBody(t *testing.T) {
 	}
 }
 
+// ── Prehashed signing / envelope verification ────────────────────────────────
+
+func TestSignPrehashedRoundTrip(t *testing.T) {
+	pub, priv := newKey(t)
+	body := []byte("a streamed body the signer never holds in full")
+
+	req, err := http.NewRequest(http.MethodPost, "http://example/api/v1/repos/alice/r/packfiles", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.SignRequestPrehashed(req, auth.HashBody(body), "alice", priv)
+
+	// VerifyEnvelope returns the claimed hash without ever seeing the body.
+	env, err := auth.VerifyEnvelope(req, pub)
+	if err != nil {
+		t.Fatalf("VerifyEnvelope: %v", err)
+	}
+	if env.Username != "alice" {
+		t.Fatalf("username: got %q, want alice", env.Username)
+	}
+	if env.ClaimedBodyHash != auth.HashBody(body) {
+		t.Fatalf("claimed hash mismatch:\n got  %s\n want %s", env.ClaimedBodyHash, auth.HashBody(body))
+	}
+
+	// The full VerifyRequest still accepts the matching body.
+	if _, err := auth.VerifyRequest(req, body, pub); err != nil {
+		t.Fatalf("VerifyRequest with matching body: %v", err)
+	}
+}
+
+// TestVerifyEnvelopeIgnoresBody documents the streaming contract: the envelope
+// check is body-agnostic, so a caller MUST compare the actual bytes against
+// ClaimedBodyHash itself before trusting the request.
+func TestVerifyEnvelopeIgnoresBody(t *testing.T) {
+	pub, priv := newKey(t)
+	signed := []byte("the bytes the client promised to send")
+
+	req, err := http.NewRequest(http.MethodPost, "http://example/x", bytes.NewReader([]byte("totally different bytes")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.SignRequestPrehashed(req, auth.HashBody(signed), "alice", priv)
+
+	// Envelope verifies fine — it only commits to the header values.
+	env, err := auth.VerifyEnvelope(req, pub)
+	if err != nil {
+		t.Fatalf("VerifyEnvelope should ignore body: %v", err)
+	}
+	// But the full body check catches the mismatch.
+	if _, err := auth.VerifyRequest(req, []byte("totally different bytes"), pub); !errors.Is(err, auth.ErrBadBodyHash) {
+		t.Fatalf("expected ErrBadBodyHash for mismatched body, got %v", err)
+	}
+	_ = env
+}
+
+func TestVerifyEnvelopeTamperedSignatureFails(t *testing.T) {
+	pub, priv := newKey(t)
+	req, err := http.NewRequest(http.MethodGet, "http://example/x", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.SignRequestPrehashed(req, auth.HashBody(nil), "alice", priv)
+
+	req.Method = http.MethodDelete // mutate after signing
+	if _, err := auth.VerifyEnvelope(req, pub); !errors.Is(err, auth.ErrBadSignature) {
+		t.Fatalf("expected ErrBadSignature, got %v", err)
+	}
+}
+
 // ── Tamper detection ─────────────────────────────────────────────────────────
 
 func TestTamperedBodyFails(t *testing.T) {

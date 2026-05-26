@@ -7,6 +7,8 @@ package helper
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -199,18 +201,17 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	slog.Debug("packfiles to fetch", slog.Int("count", len(seqs)))
 
 	for _, seq := range seqs {
-		data, err := h.client.DownloadPackfile(h.owner, h.repo, seq)
+		body, err := h.client.DownloadPackfile(h.owner, h.repo, seq)
 		if err != nil {
 			return fmt.Errorf("downloading packfile seq=%d: %w", seq, err)
 		}
-		slog.Debug("packfile downloaded",
-			slog.Int64("seq", seq),
-			slog.Int("encrypted_bytes", len(data)),
-		)
+		slog.Debug("packfile download started", slog.Int64("seq", seq))
 
-		if err := unpackEncrypted(data, repoKey, gitDir); err != nil {
+		if err := unpackEncrypted(body, repoKey, gitDir); err != nil {
+			body.Close()
 			return fmt.Errorf("unpacking packfile seq=%d: %w", seq, err)
 		}
+		body.Close()
 		slog.Debug("packfile unpacked", slog.Int64("seq", seq))
 
 		st.LastSeq = seq
@@ -228,35 +229,48 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	return nil
 }
 
-// unpackEncrypted decrypts data into a temp pack file and runs
-// git unpack-objects to import the objects into the local object store.
-func unpackEncrypted(data, repoKey []byte, gitDir string) error {
-	tmp, err := os.CreateTemp("", "gf-pack-*.pack")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+// unpackEncrypted streams encrypted packfile bytes from src, decrypts them on
+// the fly, and pipes the plaintext pack into `git index-pack --stdin`, which
+// writes it into the local object store as a pack (plus index).
+//
+// index-pack is used rather than unpack-objects: it keeps the objects packed
+// instead of exploding them into the loose-object directory, which is what
+// real git does on fetch and is the only form that scales to large packs.
+//
+// Decryption runs in a goroutine writing to a pipe so neither the ciphertext
+// nor the plaintext is ever fully buffered in memory.
+func unpackEncrypted(src io.Reader, repoKey []byte, gitDir string) error {
+	pr, pw := io.Pipe()
 
-	if err := crypto.DecryptPackfile(tmp, bytes.NewReader(data), repoKey); err != nil {
-		tmp.Close()
-		return fmt.Errorf("decrypting: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-
-	f, err := os.Open(tmpName)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	cmd := exec.Command("git", "unpack-objects")
-	cmd.Stdin = f
+	cmd := exec.Command("git", "index-pack", "--stdin")
+	cmd.Stdin = pr
 	cmd.Env = append(os.Environ(), "GIT_DIR="+gitDir)
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	cmd.Stdout = io.Discard // index-pack prints the pack SHA we don't need
+
+	if err := cmd.Start(); err != nil {
+		pr.Close()
+		return fmt.Errorf("starting index-pack: %w", err)
+	}
+
+	// Decrypt into the pipe. Any decryption error is propagated to index-pack
+	// by closing the write end with that error, so cmd.Wait observes a broken
+	// stdin and fails rather than indexing a truncated pack.
+	decErr := make(chan error, 1)
+	go func() {
+		err := crypto.DecryptPackfile(pw, src, repoKey)
+		pw.CloseWithError(err)
+		decErr <- err
+	}()
+
+	waitErr := cmd.Wait()
+	if err := <-decErr; err != nil {
+		return fmt.Errorf("decrypting: %w", err)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("index-pack: %w", waitErr)
+	}
+	return nil
 }
 
 // ── push ──────────────────────────────────────────────────────────────────────
@@ -348,21 +362,54 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	packCmd.Stdin = &revInput
 	packCmd.Env = gitEnv
 	packCmd.Stderr = os.Stderr
-	packData, err := packCmd.Output()
+	packOut, err := packCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("pack-objects: %w", err)
+		return fmt.Errorf("pack-objects stdout: %w", err)
 	}
-	slog.Debug("packfile built", slog.Int("plain_bytes", len(packData)))
+	if err := packCmd.Start(); err != nil {
+		return fmt.Errorf("starting pack-objects: %w", err)
+	}
 
-	// Encrypt.
-	var encrypted bytes.Buffer
-	if err := crypto.EncryptPackfile(&encrypted, bytes.NewReader(packData), repoKey); err != nil {
+	// Stage the encrypted pack in a temp file while hashing it, so we can set
+	// Content-Length and sign the body without holding the whole pack in RAM.
+	// pack-objects streams its output straight through the encrypting writer.
+	tmp, err := os.CreateTemp("", "gf-push-*.pack.enc")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	hasher := sha256.New()
+	if err := crypto.EncryptPackfile(io.MultiWriter(tmp, hasher), packOut, repoKey); err != nil {
+		tmp.Close()
+		_ = packCmd.Wait()
 		return fmt.Errorf("encrypting packfile: %w", err)
 	}
-	slog.Debug("packfile encrypted", slog.Int("encrypted_bytes", encrypted.Len()))
+	if err := packCmd.Wait(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("pack-objects: %w", err)
+	}
+	size, err := tmp.Seek(0, io.SeekCurrent)
+	if err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		tmp.Close()
+		return err
+	}
+	bodyHash := hex.EncodeToString(hasher.Sum(nil))
+	slog.Debug("packfile encrypted", slog.Int64("encrypted_bytes", size))
 
-	// Upload.
-	seq, err := h.client.UploadPackfile(h.owner, h.repo, encrypted.Bytes())
+	// Upload by streaming the temp file. UploadPackfile reads it to EOF; we
+	// keep the handle open until the call returns, then defer removes it.
+	seq, err := h.client.UploadPackfile(h.owner, h.repo, tmp, size, bodyHash)
+	tmp.Close()
 	if err != nil {
 		return fmt.Errorf("uploading packfile: %w", err)
 	}

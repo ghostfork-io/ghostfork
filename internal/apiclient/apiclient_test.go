@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"io"
 	"testing"
 
 	"github.com/ghostfork/gf/internal/apiclient"
 	"github.com/ghostfork/gf/server/testserver"
+	"github.com/ghostfork/gf/shared/auth"
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -43,6 +45,23 @@ func withRepo(t *testing.T, ts *testserver.TestServer, username, name string) *a
 		t.Fatalf("create repo: %v", err)
 	}
 	return c
+}
+
+// uploadBytes wraps the streaming UploadPackfile API for tests that just want
+// to push a small []byte and don't care about disk staging.
+func uploadBytes(c *apiclient.Client, owner, repo string, data []byte) (int64, error) {
+	return c.UploadPackfile(owner, repo, bytes.NewReader(data), int64(len(data)), auth.HashBody(data))
+}
+
+// downloadBytes drains the streaming DownloadPackfile into a []byte for
+// comparison in tests.
+func downloadBytes(c *apiclient.Client, owner, repo string, seq int64) ([]byte, error) {
+	rc, err := c.DownloadPackfile(owner, repo, seq)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
@@ -177,7 +196,7 @@ func TestUploadPackfileReturnsSeq1(t *testing.T) {
 	ts := testserver.Start(t)
 	c := withRepo(t, ts, "alice", "repo")
 
-	seq, err := c.UploadPackfile("alice", "repo", []byte("packdata"))
+	seq, err := uploadBytes(c, "alice", "repo", []byte("packdata"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +210,7 @@ func TestUploadPackfileSequentialSeqs(t *testing.T) {
 	c := withRepo(t, ts, "alice", "repo")
 
 	for i := int64(1); i <= 3; i++ {
-		seq, err := c.UploadPackfile("alice", "repo", []byte("pack"))
+		seq, err := uploadBytes(c, "alice", "repo", []byte("pack"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,7 +225,7 @@ func TestListPackfilesReturnsAllSeqs(t *testing.T) {
 	c := withRepo(t, ts, "alice", "repo")
 
 	for range 3 {
-		c.UploadPackfile("alice", "repo", []byte("pack")) //nolint:errcheck
+		uploadBytes(c, "alice", "repo", []byte("pack")) //nolint:errcheck
 	}
 
 	seqs, err := c.ListPackfiles("alice", "repo", 0)
@@ -228,7 +247,7 @@ func TestListPackfilesAfterN(t *testing.T) {
 	c := withRepo(t, ts, "alice", "repo")
 
 	for range 3 {
-		c.UploadPackfile("alice", "repo", []byte("pack")) //nolint:errcheck
+		uploadBytes(c, "alice", "repo", []byte("pack")) //nolint:errcheck
 	}
 
 	seqs, err := c.ListPackfiles("alice", "repo", 2)
@@ -245,9 +264,9 @@ func TestDownloadPackfileMatchesUpload(t *testing.T) {
 	c := withRepo(t, ts, "alice", "repo")
 
 	payload := []byte("encrypted-packfile-contents")
-	seq, _ := c.UploadPackfile("alice", "repo", payload)
+	seq, _ := uploadBytes(c, "alice", "repo", payload)
 
-	got, err := c.DownloadPackfile("alice", "repo", seq)
+	got, err := downloadBytes(c, "alice", "repo", seq)
 	if err != nil {
 		t.Fatal(err)
 	}
