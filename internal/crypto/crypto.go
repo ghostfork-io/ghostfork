@@ -72,7 +72,17 @@ func LoadIdentity(path string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
+	return ParseIdentity(string(data))
+}
+
+// ParseIdentity decodes an Ed25519 identity from its base64-std string form
+// (the same format SaveIdentity writes). Whitespace around the value is
+// trimmed so input pasted from a terminal works without sanitization.
+//
+// Used by 'gf login --recover' to accept a key from terminal input or stdin
+// instead of from a file on disk.
+func ParseIdentity(s string) (*Identity, error) {
+	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s))
 	if err != nil {
 		return nil, fmt.Errorf("decoding identity: %w", err)
 	}
