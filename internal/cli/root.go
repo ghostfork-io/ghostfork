@@ -61,6 +61,7 @@ func init() {
 	rootCmd.AddCommand(initRepoCmd)
 	rootCmd.AddCommand(addUserCmd)
 	rootCmd.AddCommand(removeUserCmd)
+	rootCmd.AddCommand(switchUserCmd)
 }
 
 // Execute runs the root command. It is called from cmd/gf/main.go.

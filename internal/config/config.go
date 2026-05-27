@@ -43,6 +43,14 @@ func DefaultPath() string {
 	return filepath.Join(dir, "gf", "config")
 }
 
+// DefaultDir returns the gf config directory — the parent of DefaultPath.
+// The active account's config and identity live directly here; other
+// accounts are parked in a subdirectory named after their username (see
+// the switch-user command).
+func DefaultDir() string {
+	return filepath.Dir(DefaultPath())
+}
+
 // DefaultIdentityPath returns the path to the Ed25519 identity file.
 // Overridable via GF_IDENTITY env var.
 func DefaultIdentityPath() string {
