@@ -6,11 +6,13 @@
 package logging
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // envFormat selects "text" (default) or "json" via GHOSTFORK_LOG_FORMAT.
@@ -22,13 +24,26 @@ const envLevel = "GHOSTFORK_LOG_LEVEL"
 // envFile names a file to append logs to in addition to stderr.
 const envFile = "GHOSTFORK_LOG_FILE"
 
+// envMaxSizeMB caps the active log file before it rotates. Default 50 MB.
+const envMaxSizeMB = "GHOSTFORK_LOG_MAX_SIZE_MB"
+
+// envMaxBackups limits how many rotated files lumberjack keeps. Default 5.
+const envMaxBackups = "GHOSTFORK_LOG_MAX_BACKUPS"
+
+const defaultMaxSizeMB = 50
+const defaultMaxBackups = 5
+const defaultMaxAgeDays = 30
+
 // NewServer builds the logger for gfserver. Format and level are taken from
 // env vars: GHOSTFORK_LOG_FORMAT (text|json, default text) and
 // GHOSTFORK_LOG_LEVEL (debug|info|warn|error, default info).
 //
 // If logFile is non-empty (or GHOSTFORK_LOG_FILE is set), logs are written to
 // both stderr and that file. The flag value wins over the env var. Rotation
-// is delegated to logrotate(8) with copytruncate — see docs/deployment.md.
+// is built in via lumberjack — the file is capped at GHOSTFORK_LOG_MAX_SIZE_MB
+// (default 50) and at most GHOSTFORK_LOG_MAX_BACKUPS rotated files
+// (default 5) are kept, so disk usage has a hard ceiling. No external
+// logrotate config is needed.
 func NewServer(logFile string) (*slog.Logger, io.Closer, error) {
 	if logFile == "" {
 		logFile = os.Getenv(envFile)
@@ -37,14 +52,17 @@ func NewServer(logFile string) (*slog.Logger, io.Closer, error) {
 	var w io.Writer = os.Stderr
 	var closer io.Closer
 	if logFile != "" {
-		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err != nil {
-			return nil, nil, fmt.Errorf("opening log file %q: %w", logFile, err)
+		rot := &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    envIntOr(envMaxSizeMB, defaultMaxSizeMB),
+			MaxBackups: envIntOr(envMaxBackups, defaultMaxBackups),
+			MaxAge:     defaultMaxAgeDays,
+			Compress:   false,
 		}
 		// Tee to stderr so interactive runs and systemd/Docker still see logs;
 		// the file is a durable copy independent of the orchestrator.
-		w = io.MultiWriter(os.Stderr, f)
-		closer = f
+		w = io.MultiWriter(os.Stderr, rot)
+		closer = rot
 	}
 
 	logger := newLogger(w, envOr(envFormat, "text"), parseLevel(os.Getenv(envLevel), slog.LevelInfo))
@@ -100,6 +118,15 @@ func parseLevel(s string, def slog.Level) slog.Level {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func envIntOr(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
 	}
 	return def
 }
