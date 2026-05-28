@@ -151,7 +151,7 @@ func TestConfigRoundTrip(t *testing.T) {
 func TestConfigSaveOverwritesExisting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config")
 
-	config.Save(path, &config.Config{Username: "alice", ServerURL: "old"})         //nolint:errcheck
+	config.Save(path, &config.Config{Username: "alice", ServerURL: "old"})        //nolint:errcheck
 	config.Save(path, &config.Config{Username: "alice", ServerURL: "new-server"}) //nolint:errcheck
 
 	loaded, err := config.Load(path)
