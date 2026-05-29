@@ -406,9 +406,13 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	bodyHash := hex.EncodeToString(hasher.Sum(nil))
 	slog.Debug("packfile encrypted", slog.Int64("encrypted_bytes", size))
 
+	// The branch this push targets, recorded with the packfile so the server
+	// can report per-branch packfile counts, and reused for the ref update.
+	branch := strings.TrimPrefix(dst, "refs/heads/")
+
 	// Upload by streaming the temp file. UploadPackfile reads it to EOF; we
 	// keep the handle open until the call returns, then defer removes it.
-	seq, err := h.client.UploadPackfile(h.owner, h.repo, tmp, size, bodyHash)
+	seq, err := h.client.UploadPackfile(h.owner, h.repo, branch, tmp, size, bodyHash)
 	tmp.Close()
 	if err != nil {
 		return fmt.Errorf("uploading packfile: %w", err)
@@ -416,7 +420,6 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	slog.Debug("packfile uploaded", slog.Int64("seq", seq))
 
 	// Update the remote ref tip.
-	branch := strings.TrimPrefix(dst, "refs/heads/")
 	if err := h.client.UpdateRef(h.owner, h.repo, branch, newSHA); err != nil {
 		return fmt.Errorf("updating ref: %w", err)
 	}

@@ -113,8 +113,16 @@ func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 //
 // If the bytes sent on the wire do not match bodyHashHex the server rejects
 // with 401 (returned here as a generic HTTP error).
-func (c *Client) UploadPackfile(owner, repo string, body io.Reader, size int64, bodyHashHex string) (int64, error) {
-	req, err := http.NewRequest(http.MethodPost, c.BaseURL+repoPath(owner, repo)+"/packfiles", body)
+//
+// branch is the push target (e.g. "main"); it is recorded server-side for
+// per-branch packfile counts. Empty means "don't attribute". It travels in the
+// query string, so the request signature (which covers path+query) protects it.
+func (c *Client) UploadPackfile(owner, repo, branch string, body io.Reader, size int64, bodyHashHex string) (int64, error) {
+	path := repoPath(owner, repo) + "/packfiles"
+	if branch != "" {
+		path += "?branch=" + url.QueryEscape(branch)
+	}
+	req, err := http.NewRequest(http.MethodPost, c.BaseURL+path, body)
 	if err != nil {
 		return 0, err
 	}
@@ -122,7 +130,7 @@ func (c *Client) UploadPackfile(owner, repo string, body io.Reader, size int64, 
 	req.Header.Set("Content-Type", "application/octet-stream")
 	c.signPrehashed(req, bodyHashHex)
 
-	resp, err := c.doStream(req, http.MethodPost, repoPath(owner, repo)+"/packfiles")
+	resp, err := c.doStream(req, http.MethodPost, path)
 	if err != nil {
 		return 0, err
 	}

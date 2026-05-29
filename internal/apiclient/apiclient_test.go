@@ -50,7 +50,7 @@ func withRepo(t *testing.T, ts *testserver.TestServer, username, name string) *a
 // uploadBytes wraps the streaming UploadPackfile API for tests that just want
 // to push a small []byte and don't care about disk staging.
 func uploadBytes(c *apiclient.Client, owner, repo string, data []byte) (int64, error) {
-	return c.UploadPackfile(owner, repo, bytes.NewReader(data), int64(len(data)), auth.HashBody(data))
+	return c.UploadPackfile(owner, repo, "", bytes.NewReader(data), int64(len(data)), auth.HashBody(data))
 }
 
 // downloadBytes drains the streaming DownloadPackfile into a []byte for
