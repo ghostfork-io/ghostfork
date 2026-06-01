@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -74,6 +75,13 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	username, _ := cmd.Flags().GetString("username")
 	doRecover, _ := cmd.Flags().GetBool("recover")
 
+	// Reject a malformed --server before touching disk or the network, so the
+	// user gets an immediate, actionable error instead of a cryptic transport
+	// failure (or a hang) once a request is sent.
+	if err := apiclient.ValidateBaseURL(serverURL); err != nil {
+		return err
+	}
+
 	identityPath := config.DefaultIdentityPath()
 	cfgPath := config.DefaultPath()
 
@@ -127,6 +135,12 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	slog.Debug("registering with server", slog.String("server", serverURL))
 	client := apiclient.New(serverURL)
 	if err := client.Register(username, id.PublicKeyString()); err != nil {
+		// An unreachable server already carries a clear, user-facing message;
+		// don't bury it under a "registering with server:" prefix.
+		var unreachable *apiclient.UnreachableError
+		if errors.As(err, &unreachable) {
+			return err
+		}
 		return fmt.Errorf("registering with server: %w", err)
 	}
 	slog.Debug("server registration complete")
@@ -215,6 +229,13 @@ func verifyAndStore(_ *cobra.Command, serverURL, username, identityPath, cfgPath
 	client := apiclient.NewAuthenticated(serverURL, username, id.Signer())
 	remote, err := client.GetUser(username)
 	if err != nil {
+		// A server we couldn't reach is not an auth failure — surface the
+		// clear connectivity message rather than the misleading "could not
+		// verify identity" (which implies the key or username was wrong).
+		var unreachable *apiclient.UnreachableError
+		if errors.As(err, &unreachable) {
+			return err
+		}
 		// 401 from the server covers both "unknown user" and "wrong key" —
 		// the server deliberately doesn't distinguish to avoid leaking
 		// username existence. Single message covers both.

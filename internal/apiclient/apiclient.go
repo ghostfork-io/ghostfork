@@ -2,11 +2,14 @@ package apiclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,10 +20,70 @@ import (
 )
 
 // jsonRequestTimeout caps short, body-buffered API calls (refs, keys, repo
-// creation). Packfile upload and download skip this timeout because they
-// stream multi-GiB bodies — there is no sensible single-call ceiling for
-// those.
+// creation). It is a hard ceiling on the whole request — connect, TLS, send,
+// and read — so a server that accepts a connection but never answers can't
+// hang the CLI indefinitely; the call fails with a timeout instead. Packfile
+// upload and download skip this timeout because they stream multi-GiB bodies —
+// there is no sensible single-call ceiling for those.
 const jsonRequestTimeout = 60 * time.Second
+
+// UnreachableError reports that the server could not be contacted at all —
+// connection refused, DNS failure, no route to host, or a timeout — as opposed
+// to the server responding with an HTTP error status (those surface as
+// "HTTP <code>: ..." errors). Its message is user-facing: callers can print it
+// directly. The originating transport error is preserved via Unwrap for
+// --verbose/debug output.
+type UnreachableError struct {
+	BaseURL string
+	Timeout bool
+	Err     error
+}
+
+func (e *UnreachableError) Error() string {
+	if e.Timeout {
+		return fmt.Sprintf(
+			"could not reach server at %s — connection timed out; check the address and that the server is running, then try again",
+			e.BaseURL)
+	}
+	return fmt.Sprintf(
+		"could not reach server at %s — check the address and that the server is running, then try again",
+		e.BaseURL)
+}
+
+func (e *UnreachableError) Unwrap() error { return e.Err }
+
+// ValidateBaseURL checks that raw is a well-formed absolute http(s) URL,
+// without making any network call. Commands use it to reject a malformed
+// --server value up front with a clear message, rather than emitting a cryptic
+// transport error (or, worse, hanging) once a request is actually sent.
+func ValidateBaseURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid server URL %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("invalid server URL %q: must start with http:// or https:// (e.g. https://api.example.com)", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid server URL %q: missing host (e.g. https://api.example.com)", raw)
+	}
+	return nil
+}
+
+// classifyTransportError converts a low-level failure from http.Client.Do into
+// a user-facing UnreachableError. It is only ever called on the error Do
+// returns, which for our requests is always a connection-level problem — a
+// server that responds with an HTTP error status does NOT surface here (that is
+// handled by the status-code checks). The timeout flag distinguishes a stalled
+// connection (deadline hit) from an outright refusal/DNS failure.
+func classifyTransportError(err error, baseURL string) error {
+	var netErr net.Error
+	timeout := errors.As(err, &netErr) && netErr.Timeout()
+	if !timeout {
+		timeout = errors.Is(err, context.DeadlineExceeded)
+	}
+	return &UnreachableError{BaseURL: baseURL, Timeout: timeout, Err: err}
+}
 
 // Client is a typed HTTP client for the gfserver API. An empty username +
 // nil signer means an unauthenticated client; only Register may be called.
@@ -275,7 +338,7 @@ func (c *Client) doStream(req *http.Request, method, path string) (*http.Respons
 			slog.String("path", path),
 			slog.Any("err", err),
 		)
-		return nil, err
+		return nil, classifyTransportError(err, c.BaseURL)
 	}
 	slog.Debug("api stream request",
 		slog.String("method", method),
@@ -299,7 +362,7 @@ func (c *Client) do(req *http.Request, method, path string) (*http.Response, err
 			slog.String("path", path),
 			slog.Any("err", err),
 		)
-		return nil, err
+		return nil, classifyTransportError(err, c.BaseURL)
 	}
 	slog.Debug("api request",
 		slog.String("method", method),
