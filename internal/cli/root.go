@@ -63,7 +63,6 @@ func init() {
 	rootCmd.AddCommand(removeUserCmd)
 	rootCmd.AddCommand(switchUserCmd)
 	rootCmd.AddCommand(keyCmd)
-	rootCmd.AddCommand(installCmd)
 }
 
 // Execute runs the root command. It is called from cmd/gf/main.go.
