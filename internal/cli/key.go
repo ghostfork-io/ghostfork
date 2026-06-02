@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -121,24 +122,42 @@ func runKeyExport(cmd *cobra.Command, _ []string) error {
 
 // printFileInstructions is the default mode: it reveals the key file's path
 // (never its contents) and walks the user through copying the file to a new
-// machine and recovering there.
+// machine and recovering there. The destination folder is derived from the
+// real identity path (not hardcoded) so the guidance is correct on every OS —
+// notably macOS, where gf's config lives under ~/Library/Application Support/gf
+// rather than ~/.config/gf, and the space in the path needs quoting.
 func printFileInstructions(cmd *cobra.Command, identityPath, server, username string) {
 	w := cmd.OutOrStdout()
+	identityDir := filepath.Dir(identityPath)
+	keyFile := filepath.Base(identityPath) // identity.ed25519
+
 	fmt.Fprintf(w, "\nYour Ghostfork private key is stored in this file:\n\n")
 	fmt.Fprintf(w, "    %s\n\n", identityPath)
-	fmt.Fprintf(w, "Move your account to a NEW machine in 3 steps:\n\n")
-	fmt.Fprintf(w, "  1. Copy the key file to the new machine. For example, over SSH:\n\n")
-	fmt.Fprintf(w, "         scp %s \\\n             USER@NEW_HOST:~/.config/gf/identity.ed25519\n\n", identityPath)
-	fmt.Fprintf(w, "     First make sure the folder exists on the new machine:\n")
-	fmt.Fprintf(w, "         mkdir -p ~/.config/gf && chmod 700 ~/.config/gf\n\n")
-	fmt.Fprintf(w, "  2. Log in on the new machine. gf finds the copied key and recovers\n")
-	fmt.Fprintf(w, "     your account automatically — no extra flags needed:\n\n")
+	fmt.Fprintf(w, "Set up a NEW machine with the same account in 3 steps:\n\n")
+	fmt.Fprintf(w, "  1. On the new machine, create gf's config folder:\n\n")
+	fmt.Fprintf(w, "         mkdir -p %s\n\n", shellQuote(identityDir))
+	fmt.Fprintf(w, "  2. Copy the key file above into that folder on the new machine,\n")
+	fmt.Fprintf(w, "     keeping the name %q. Any transfer works — scp, AirDrop, a USB\n", keyFile)
+	fmt.Fprintf(w, "     stick. (Copying over SSH? Quote the paths — they can contain spaces.)\n\n")
+	fmt.Fprintf(w, "  3. Log in on the new machine — gf finds the copied key and recovers\n")
+	fmt.Fprintf(w, "     your account automatically, no extra flags:\n\n")
 	fmt.Fprintf(w, "         gf login --server %s --username %s\n\n", server, username)
-	fmt.Fprintf(w, "  3. Done — 'git push' and 'git pull' work exactly as before.\n\n")
+	fmt.Fprintf(w, "     Then 'git push' and 'git pull' work exactly as before.\n\n")
+	fmt.Fprintf(w, "Note: that folder is where gf keeps your key on THIS machine. The\n")
+	fmt.Fprintf(w, "location differs by OS (macOS: ~/Library/Application Support/gf,\n")
+	fmt.Fprintf(w, "Linux: ~/.config/gf, Windows: %%AppData%%\\gf). If the new machine runs a\n")
+	fmt.Fprintf(w, "different OS, set GF_IDENTITY there to point at the copied file.\n\n")
 	fmt.Fprintf(w, "Prefer copy-paste over copying a file?\n")
 	fmt.Fprintf(w, "    gf key export --clipboard   put the key on your clipboard, then run\n")
 	fmt.Fprintf(w, "                                'gf login ... --recover' on the new machine\n")
 	fmt.Fprintf(w, "    gf key export --show        print the key so you can copy it by hand\n\n")
+}
+
+// shellQuote wraps a path in single quotes (escaping any embedded single quote)
+// so it survives the shell as one argument — needed because the default gf
+// config path on macOS contains a space ("Application Support").
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // printClipboardInstructions is shown after the key has been placed on the
