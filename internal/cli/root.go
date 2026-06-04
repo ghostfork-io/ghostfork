@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"log/slog"
+	"strings"
+
 	"github.com/spf13/cobra"
 
+	"github.com/ghostfork/gf/internal/config"
 	"github.com/ghostfork/gf/internal/logging"
 )
 
@@ -50,7 +54,13 @@ See https://github.com/ghostfork/gf for the full documentation.`,
 	SilenceErrors:     true,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		logging.SetDefault(logging.NewCLI(verbose))
+		logging.SetDefault(logging.NewCLI(verbose, config.DefaultLogPath()))
+		// First line of every operation's audit trail: which command ran and
+		// with which inputs. Lands in the log file even without -v.
+		slog.Debug("command received",
+			slog.String("command", cmd.Name()),
+			slog.String("args", strings.Join(args, " ")),
+		)
 	},
 }
 
@@ -67,5 +77,14 @@ func init() {
 
 // Execute runs the root command. It is called from cmd/gf/main.go.
 func Execute() error {
-	return rootCmd.Execute()
+	// Install a file-backed logger before parsing so even flag/usage errors
+	// reach the log file; PersistentPreRun re-installs it once -v is known.
+	logging.SetDefault(logging.NewCLI(false, config.DefaultLogPath()))
+	err := rootCmd.Execute()
+	if err != nil {
+		// Never fail silently: the log file must record the failure. FileOnly
+		// keeps it off stderr, where main.go already prints "Error: …".
+		slog.Error("command failed", logging.FileOnly(), slog.Any("err", err))
+	}
+	return err
 }

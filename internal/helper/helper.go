@@ -28,9 +28,10 @@ import (
 // Run is the entry point called from cmd/gf/main.go when the binary is
 // invoked as git-remote-gf. Git passes: git-remote-gf <remote-name> <url>
 func Run() {
-	// git invokes us directly, so we have no -v flag to honour — verbosity is
-	// controlled by GHOSTFORK_LOG_LEVEL (see internal/logging).
-	logging.SetDefault(logging.NewCLI(false))
+	// git invokes us directly, so we have no -v flag to honour — stderr
+	// verbosity is controlled by GHOSTFORK_LOG_LEVEL (see internal/logging).
+	// The log file captures every step at DEBUG regardless.
+	logging.SetDefault(logging.NewCLI(false, config.DefaultLogPath()))
 
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "usage: git-remote-gf <remote-name> <url>")

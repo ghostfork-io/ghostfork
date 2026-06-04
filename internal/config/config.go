@@ -51,6 +51,14 @@ func DefaultDir() string {
 	return filepath.Dir(DefaultPath())
 }
 
+// DefaultLogPath returns the path to the CLI/helper log file, which lives in
+// the gf config directory next to the config file (e.g. ~/.config/gf/gf.log
+// on Linux). GHOSTFORK_LOG_FILE overrides it (handled in internal/logging).
+// Following DefaultDir means tests that set GF_CONFIG get an isolated log too.
+func DefaultLogPath() string {
+	return filepath.Join(DefaultDir(), "gf.log")
+}
+
 // DefaultIdentityPath returns the path to the Ed25519 identity file.
 // Overridable via GF_IDENTITY env var.
 func DefaultIdentityPath() string {

@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 
 	"github.com/spf13/cobra"
 
 	"github.com/ghostfork/gf/internal/crypto"
+	"github.com/ghostfork/gf/internal/logging"
 )
 
 var initRepoCmd = &cobra.Command{
@@ -46,12 +49,23 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("generating repo key: %w", err)
 	}
+	// Demo aid (see docs/sales-demo.md Act 3): show the raw key so a prospect
+	// can watch it get wrapped client-side. Logging plaintext key material is
+	// acceptable ONLY when the user explicitly opted into debug output — the
+	// log file records DEBUG unconditionally, so this must be gated on
+	// DebugRequested, never on the logger's level.
+	if logging.DebugRequested(verbose) {
+		slog.Debug("generated repo sym key (plaintext, hex): " + hex.EncodeToString(repoKey))
+	}
 
+	slog.Debug(fmt.Sprintf("encrypting repo sym key with %s's public key (client-side operation)", sess.cfg.Username))
 	encKey, err := crypto.EncryptRepoKey(repoKey, sess.identity.PublicKey())
 	if err != nil {
 		return fmt.Errorf("encrypting repo key: %w", err)
 	}
-	slog.Debug("repo key generated and wrapped for owner")
+	// This blob is exactly what is uploaded to the server — ciphertext only.
+	slog.Debug(fmt.Sprintf("encrypted repo sym key for %s (base64): %s",
+		sess.cfg.Username, base64.StdEncoding.EncodeToString(encKey)))
 
 	// The repo owner is always the caller; the server derives it from the
 	// authenticated session, so we just pass the name.
