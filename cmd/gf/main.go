@@ -20,7 +20,11 @@ func main() {
 		return
 	}
 	if err := cli.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// Pad the error like the commands pad their success output: a leading
+		// blank line and a trailing blank line so it doesn't crowd the command
+		// or the next prompt. The "Error:" prefix labels what follows, which may
+		// be a multi-line message.
+		fmt.Fprintf(os.Stderr, "\nError: %v\n\n", err)
 		os.Exit(1)
 	}
 }
