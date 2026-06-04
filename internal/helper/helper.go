@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -24,6 +25,11 @@ import (
 	"github.com/ghostfork/gf/internal/state"
 	"github.com/ghostfork/gf/protocol/types"
 )
+
+// packfilePreviewLimit is how many leading bytes of the encrypted packfile
+// the debug preview logs. Matches the admin panel's Inspect window so the
+// two renderings can be compared byte for byte during a demo.
+const packfilePreviewLimit = 10 * 1024
 
 // Run is the entry point called from cmd/gf/main.go when the binary is
 // invoked as git-remote-gf. Git passes: git-remote-gf <remote-name> <url>
@@ -301,8 +307,17 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	if err != nil {
 		return fmt.Errorf("getting server refs: %w", err)
 	}
-	slog.Debug("server refs fetched", slog.Int("count", len(serverRefs)))
+	// Narrate what the server's refs mean for this push: nothing known yet →
+	// the whole history goes up; otherwise pack-objects excludes what the
+	// server already has (see doPush's revInput).
+	if len(serverRefs) == 0 {
+		slog.Debug("refs fetched from server — remote is empty, full push")
+	} else {
+		slog.Debug(fmt.Sprintf(
+			"refs fetched from server — %d existing ref(s), incremental push", len(serverRefs)))
+	}
 
+	failed := 0
 	for _, line := range batch {
 		// "push refs/heads/main:refs/heads/main" or "+refs/heads/main:refs/heads/main" (force)
 		spec := strings.TrimPrefix(line, "push ")
@@ -324,8 +339,16 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		}
 
 		if err := h.doPush(w, src, dst, repoKey, serverRefs, gitDir); err != nil {
+			// Never fail silently: git relays the protocol error to the user,
+			// but the log must record it too (helper.Run only sees fatal errors,
+			// not per-ref failures).
+			slog.Error("push failed", slog.String("ref", dst), slog.Any("err", err))
 			fmt.Fprintf(w, "error %s %v\n", dst, err)
+			failed++
 		}
+	}
+	if failed == 0 {
+		slog.Info("push complete")
 	}
 
 	fmt.Fprintln(w) // blank line ends push response
@@ -367,6 +390,7 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	if err != nil {
 		return fmt.Errorf("pack-objects stdout: %w", err)
 	}
+	slog.Debug("git pack-objects: building packfile locally")
 	if err := packCmd.Start(); err != nil {
 		return fmt.Errorf("starting pack-objects: %w", err)
 	}
@@ -381,8 +405,13 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 
+	// plain counts the plaintext pack bytes flowing into the encryptor, so the
+	// narration below can report both sizes. Building and encrypting overlap
+	// (one stream), which is why this line precedes the size lines.
+	plain := &countingReader{r: packOut}
 	hasher := sha256.New()
-	if err := crypto.EncryptPackfile(io.MultiWriter(tmp, hasher), packOut, repoKey); err != nil {
+	slog.Debug("encrypting packfile with repo key (XChaCha20-Poly1305)")
+	if err := crypto.EncryptPackfile(io.MultiWriter(tmp, hasher), plain, repoKey); err != nil {
 		tmp.Close()
 		_ = packCmd.Wait()
 		return fmt.Errorf("encrypting packfile: %w", err)
@@ -405,7 +434,32 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 		return err
 	}
 	bodyHash := hex.EncodeToString(hasher.Sum(nil))
-	slog.Debug("packfile encrypted", slog.Int64("encrypted_bytes", size))
+	slog.Debug(fmt.Sprintf("packfile built: %s", humanBytes(plain.n)),
+		slog.Int64("plaintext_bytes", plain.n))
+	slog.Debug(fmt.Sprintf("ciphertext size: %s — slightly larger due to auth tag + nonce", humanBytes(size)),
+		slog.Int64("encrypted_bytes", size))
+
+	// Demo aid (docs/sales-demo.md Act 4): log the ciphertext hash and a
+	// preview AFTER encryption and BEFORE any byte goes over the wire, so an
+	// observer can match them live against the admin panel's Inspect view.
+	// Everything here is ciphertext — safe to log. The hash line is small and
+	// always lands in the audit log; the ~13 KB base64 preview is emitted only
+	// under explicit debug (GHOSTFORK_LOG_LEVEL=debug) to keep gf.log lean.
+	slog.Debug("encrypted packfile SHA-256: " + bodyHash)
+	if logging.DebugRequested(false) {
+		preview := make([]byte, packfilePreviewLimit)
+		n, err := io.ReadFull(tmp, preview)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			tmp.Close()
+			return fmt.Errorf("reading packfile preview: %w", err)
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			tmp.Close()
+			return err
+		}
+		slog.Debug("encrypted packfile preview (first 10 KB, base64): " +
+			base64.StdEncoding.EncodeToString(preview[:n]))
+	}
 
 	// The branch this push targets, recorded with the packfile so the server
 	// can report per-branch packfile counts, and reused for the ref update.
@@ -418,13 +472,13 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	if err != nil {
 		return fmt.Errorf("uploading packfile: %w", err)
 	}
-	slog.Debug("packfile uploaded", slog.Int64("seq", seq))
+	slog.Debug("upload complete — server assigned seq", slog.Int64("seq", seq))
 
 	// Update the remote ref tip.
 	if err := h.client.UpdateRef(h.owner, h.repo, branch, newSHA); err != nil {
 		return fmt.Errorf("updating ref: %w", err)
 	}
-	slog.Debug("remote ref updated",
+	slog.Debug("ref updated",
 		slog.String("branch", branch),
 		slog.String("sha", newSHA),
 	)
@@ -434,6 +488,34 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+// countingReader counts the bytes read through it. Used to report the
+// plaintext packfile size while it streams into the encryptor.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// humanBytes renders n like "4.1 KB" for the demo narration lines. Sizes
+// beyond TB don't occur in packfile pushes, so the unit list stops there.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
+}
 
 // parseURL parses a gf://owner/repo URL into its components.
 func parseURL(rawURL string) (owner, repo string, err error) {
