@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ghostfork/gf/shared/auth"
-	"github.com/ghostfork/gf/shared/types"
+	"github.com/ghostfork/gf/protocol/auth"
+	"github.com/ghostfork/gf/protocol/types"
 )
 
 // jsonRequestTimeout caps short, body-buffered API calls (refs, keys, repo

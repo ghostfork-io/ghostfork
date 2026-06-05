@@ -9,8 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghostfork/gf/internal/apiclient"
-	"github.com/ghostfork/gf/server/testserver"
-	"github.com/ghostfork/gf/shared/auth"
+	"github.com/ghostfork/gf/protocol/auth"
 )
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -26,7 +25,7 @@ func newIdentity(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 }
 
 // registered registers a user against ts and returns an authenticated client.
-func registered(t *testing.T, ts *testserver.TestServer, username string) *apiclient.Client {
+func registered(t *testing.T, ts *fakeServer, username string) *apiclient.Client {
 	t.Helper()
 	pub, priv := newIdentity(t)
 	anon := apiclient.New(ts.URL)
@@ -38,7 +37,7 @@ func registered(t *testing.T, ts *testserver.TestServer, username string) *apicl
 
 // withRepo registers a user, creates a repo, and returns the client. The repo
 // is always owned by the registered user; URL-level owner is the username.
-func withRepo(t *testing.T, ts *testserver.TestServer, username, name string) *apiclient.Client {
+func withRepo(t *testing.T, ts *fakeServer, username, name string) *apiclient.Client {
 	t.Helper()
 	c := registered(t, ts, username)
 	if err := c.CreateRepo(name, []byte("fake-enc-key")); err != nil {
@@ -67,7 +66,7 @@ func downloadBytes(c *apiclient.Client, owner, repo string, seq int64) ([]byte, 
 // ── Register ──────────────────────────────────────────────────────────────────
 
 func TestRegisterSucceeds(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	anon := apiclient.New(ts.URL)
 	pub, _ := newIdentity(t)
 
@@ -77,7 +76,7 @@ func TestRegisterSucceeds(t *testing.T) {
 }
 
 func TestRegisterDuplicateReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	anon := apiclient.New(ts.URL)
 	pub, _ := newIdentity(t)
 	encoded := base64.StdEncoding.EncodeToString(pub)
@@ -94,7 +93,7 @@ func TestRegisterDuplicateReturnsError(t *testing.T) {
 // ── GetUser ───────────────────────────────────────────────────────────────────
 
 func TestGetUser(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := registered(t, ts, "alice")
 
 	u, err := c.GetUser("alice")
@@ -110,7 +109,7 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestGetUserNotFoundReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := registered(t, ts, "alice")
 
 	_, err := c.GetUser("nobody")
@@ -122,7 +121,7 @@ func TestGetUserNotFoundReturnsError(t *testing.T) {
 // ── CreateRepo ────────────────────────────────────────────────────────────────
 
 func TestCreateRepo(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := registered(t, ts, "alice")
 
 	if err := c.CreateRepo("myrepo", []byte("enc-key")); err != nil {
@@ -131,7 +130,7 @@ func TestCreateRepo(t *testing.T) {
 }
 
 func TestCreateRepoDuplicateReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := registered(t, ts, "alice")
 
 	if err := c.CreateRepo("myrepo", []byte("enc-key")); err != nil {
@@ -145,7 +144,7 @@ func TestCreateRepoDuplicateReturnsError(t *testing.T) {
 // ── Refs ──────────────────────────────────────────────────────────────────────
 
 func TestGetRefsEmptyOnNewRepo(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	refs, err := c.GetRefs("alice", "repo")
@@ -158,7 +157,7 @@ func TestGetRefsEmptyOnNewRepo(t *testing.T) {
 }
 
 func TestUpdateAndGetRefs(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	if err := c.UpdateRef("alice", "repo", "main", "abc123"); err != nil {
@@ -178,7 +177,7 @@ func TestUpdateAndGetRefs(t *testing.T) {
 }
 
 func TestUpdateRefReplacesPreviousValue(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	c.UpdateRef("alice", "repo", "main", "aaa") //nolint:errcheck
@@ -193,7 +192,7 @@ func TestUpdateRefReplacesPreviousValue(t *testing.T) {
 // ── Packfiles ─────────────────────────────────────────────────────────────────
 
 func TestUploadPackfileReturnsSeq1(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	seq, err := uploadBytes(c, "alice", "repo", []byte("packdata"))
@@ -206,7 +205,7 @@ func TestUploadPackfileReturnsSeq1(t *testing.T) {
 }
 
 func TestUploadPackfileSequentialSeqs(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	for i := int64(1); i <= 3; i++ {
@@ -221,7 +220,7 @@ func TestUploadPackfileSequentialSeqs(t *testing.T) {
 }
 
 func TestListPackfilesReturnsAllSeqs(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	for range 3 {
@@ -243,7 +242,7 @@ func TestListPackfilesReturnsAllSeqs(t *testing.T) {
 }
 
 func TestListPackfilesAfterN(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	for range 3 {
@@ -260,7 +259,7 @@ func TestListPackfilesAfterN(t *testing.T) {
 }
 
 func TestDownloadPackfileMatchesUpload(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	payload := []byte("encrypted-packfile-contents")
@@ -276,7 +275,7 @@ func TestDownloadPackfileMatchesUpload(t *testing.T) {
 }
 
 func TestDownloadNonexistentPackfileReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	_, err := c.DownloadPackfile("alice", "repo", 99)
@@ -288,7 +287,7 @@ func TestDownloadNonexistentPackfileReturnsError(t *testing.T) {
 // ── Keys ──────────────────────────────────────────────────────────────────────
 
 func TestPutAndGetKey(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	encKey := []byte("encrypted-repo-key-bytes")
@@ -306,7 +305,7 @@ func TestPutAndGetKey(t *testing.T) {
 }
 
 func TestGetKeyNotFoundReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
 	_, err := c.GetKey("alice", "repo", "nobody")
@@ -316,7 +315,7 @@ func TestGetKeyNotFoundReturnsError(t *testing.T) {
 }
 
 func TestDeleteKey(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	alice := withRepo(t, ts, "alice", "repo")
 	// Register bob and grant him access so alice can then revoke it.
 	registered(t, ts, "bob")
@@ -335,7 +334,7 @@ func TestDeleteKey(t *testing.T) {
 // ── Auth / authz errors ───────────────────────────────────────────────────────
 
 func TestWrongSignerReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	registered(t, ts, "alice") // alice exists, but we'll try a bogus key
 
 	_, bogusPriv := newIdentity(t)
@@ -347,7 +346,7 @@ func TestWrongSignerReturnsError(t *testing.T) {
 }
 
 func TestUnauthenticatedReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	registered(t, ts, "alice")
 
 	anon := apiclient.New(ts.URL)
@@ -358,7 +357,7 @@ func TestUnauthenticatedReturnsError(t *testing.T) {
 }
 
 func TestForbiddenRepoReturnsError(t *testing.T) {
-	ts := testserver.Start(t)
+	ts := startFake(t)
 	withRepo(t, ts, "alice", "secret")
 	bob := registered(t, ts, "bob")
 
