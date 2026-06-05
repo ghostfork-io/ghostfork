@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ghostfork/gf/internal/crypto"
-	"github.com/ghostfork/gf/shared/auth"
+	"github.com/ghostfork/gf/protocol/auth"
 )
 
 var addUserCmd = &cobra.Command{

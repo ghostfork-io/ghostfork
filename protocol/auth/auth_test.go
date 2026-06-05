@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghostfork/gf/shared/auth"
+	"github.com/ghostfork/gf/protocol/auth"
 )
 
 func newKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {

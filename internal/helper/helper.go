@@ -22,7 +22,7 @@ import (
 	"github.com/ghostfork/gf/internal/crypto"
 	"github.com/ghostfork/gf/internal/logging"
 	"github.com/ghostfork/gf/internal/state"
-	"github.com/ghostfork/gf/shared/types"
+	"github.com/ghostfork/gf/protocol/types"
 )
 
 // Run is the entry point called from cmd/gf/main.go when the binary is
