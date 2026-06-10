@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ghostfork/gf/crypto"
 	"github.com/ghostfork/gf/internal/apiclient"
 	"github.com/ghostfork/gf/internal/config"
-	"github.com/ghostfork/gf/internal/crypto"
 )
 
 // session is the per-invocation context every authenticated CLI command

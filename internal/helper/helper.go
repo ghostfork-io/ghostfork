@@ -18,9 +18,9 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ghostfork/gf/crypto"
 	"github.com/ghostfork/gf/internal/apiclient"
 	"github.com/ghostfork/gf/internal/config"
-	"github.com/ghostfork/gf/internal/crypto"
 	"github.com/ghostfork/gf/internal/logging"
 	"github.com/ghostfork/gf/internal/state"
 	"github.com/ghostfork/gf/protocol/types"

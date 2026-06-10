@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ghostfork/gf/internal/crypto"
+	"github.com/ghostfork/gf/crypto"
 )
 
 // ── Identity ────────────────────────────────────────────────────────────────

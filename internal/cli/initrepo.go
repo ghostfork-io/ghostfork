@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ghostfork/gf/internal/crypto"
+	"github.com/ghostfork/gf/crypto"
 	"github.com/ghostfork/gf/internal/logging"
 )
 

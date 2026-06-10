@@ -11,8 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ghostfork/gf/crypto"
 	"github.com/ghostfork/gf/internal/config"
-	"github.com/ghostfork/gf/internal/crypto"
 )
 
 var keyCmd = &cobra.Command{
