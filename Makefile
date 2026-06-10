@@ -1,5 +1,11 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS  = -ldflags "-X main.version=$(VERSION) -s -w"
+# Build identity injected into the binary. The semver version is a constant
+# baked into the source (internal/version); only the commit is injected here.
+# COMMIT is the short SHA, falling back to "unknown" outside a git repo. DIRTY
+# appends "-dirty" when the tracked working tree has uncommitted changes — and
+# is empty (never "-dirty") when we're not in a repo at all.
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+DIRTY  := $(shell git rev-parse --git-dir >/dev/null 2>&1 && { git diff-index --quiet HEAD -- 2>/dev/null || echo -dirty; })
+LDFLAGS  = -ldflags "-X github.com/ghostfork/gf/internal/version.Commit=$(COMMIT)$(DIRTY) -s -w"
 BINDIR   = $(CURDIR)/bin
 
 # Standalone Makefile for the gf client module (github.com/ghostfork/gf).

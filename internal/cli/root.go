@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghostfork/gf/internal/config"
 	"github.com/ghostfork/gf/internal/logging"
+	"github.com/ghostfork/gf/internal/version"
 )
 
 var verbose bool
@@ -15,6 +16,10 @@ var verbose bool
 var rootCmd = &cobra.Command{
 	Use:   "gf",
 	Short: "Ghostfork — zero-trust encrypted Git remote",
+	// Enables `gf --version`. Cobra renders this as "gf version <Version>",
+	// where Version carries both the semver and the build commit, e.g.
+	// "gf version 0.1.0 (commit 9f3a2bc)".
+	Version: version.String(),
 	Long: `Ghostfork (gf) is a hosted Git remote where the server never sees your
 plaintext code, filenames, or commit messages.
 

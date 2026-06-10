@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ghostfork/gf/internal/version"
 	"github.com/ghostfork/gf/protocol/auth"
 	"github.com/ghostfork/gf/protocol/types"
 )
@@ -330,6 +331,7 @@ func (c *Client) signPrehashed(req *http.Request, bodyHashHex string) {
 // doStream is the no-timeout counterpart to do, used for packfile streams.
 // It emits the same debug log line as do.
 func (c *Client) doStream(req *http.Request, method, path string) (*http.Response, error) {
+	req.Header.Set("User-Agent", version.UserAgent())
 	start := time.Now()
 	resp, err := c.streamHTTP.Do(req)
 	if err != nil {
@@ -354,6 +356,7 @@ func (c *Client) doStream(req *http.Request, method, path string) (*http.Respons
 // from the Content-Length header so the function works for both raw and JSON
 // paths without needing to thread the body size through.
 func (c *Client) do(req *http.Request, method, path string) (*http.Response, error) {
+	req.Header.Set("User-Agent", version.UserAgent())
 	start := time.Now()
 	resp, err := c.http.Do(req)
 	if err != nil {
