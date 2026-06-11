@@ -457,6 +457,11 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 			tmp.Close()
 			return err
 		}
+		// Hex dump first, immediately after the SHA-256 line above so the two
+		// sit adjacent in the log. The format is byte-for-byte identical to the
+		// admin panel's Inspect view (toXxd), so a demo viewer can compare the
+		// client log against what the server logs line by line.
+		slog.Debug("encrypted packfile hex dump (first 10 KB):\n" + toXxd(preview[:n]))
 		slog.Debug("encrypted packfile preview (first 10 KB, base64): " +
 			base64.StdEncoding.EncodeToString(preview[:n]))
 	}
@@ -515,6 +520,43 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// toXxd renders b as an xxd-style hex dump. It is a deliberate, byte-for-byte
+// port of the admin panel's toXxd (web/admin/src/components/PackfileInspectModal.tsx)
+// so the client log and the server's Inspect view can be diffed line by line:
+//
+//	00000000  9f 3a 2b c4 7d 81 e0 59  a4 f2 13 86 cd 90 5e 72  |.:+.}..Y......^r|
+func toXxd(b []byte) string {
+	var sb strings.Builder
+	for off := 0; off < len(b); off += 16 {
+		end := off + 16
+		if end > len(b) {
+			end = len(b)
+		}
+		chunk := b[off:end]
+		cols := make([]string, 16)
+		var ascii strings.Builder
+		for i := 0; i < 16; i++ {
+			if i < len(chunk) {
+				c := chunk[i]
+				cols[i] = fmt.Sprintf("%02x", c)
+				if c >= 0x20 && c <= 0x7e {
+					ascii.WriteByte(c)
+				} else {
+					ascii.WriteByte('.')
+				}
+			} else {
+				cols[i] = "  "
+			}
+		}
+		if off > 0 {
+			sb.WriteByte('\n')
+		}
+		fmt.Fprintf(&sb, "%08x  %s  %s  |%s|",
+			off, strings.Join(cols[:8], " "), strings.Join(cols[8:], " "), ascii.String())
+	}
+	return sb.String()
 }
 
 // parseURL parses a gf://owner/repo URL into its components.
