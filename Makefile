@@ -56,6 +56,13 @@ test-short:
 # Installs to $(PREFIX)/bin. Defaults to ~/.local/bin so `make install` works
 # without sudo and respects XDG conventions. Override for a system-wide
 # install:  sudo make install PREFIX=/usr/local
+#
+# If $(PREFIX)/bin is not already on $PATH, install adds it to your shell rc so
+# `gf` (and the git-remote-gf helper) resolve in new shells — zsh (~/.zshrc, the
+# macOS default), bash (~/.bashrc, plus ~/.bash_profile on macOS login shells),
+# or ~/.profile otherwise. The edit is marked and idempotent, so re-running
+# install never duplicates it, and `make uninstall` removes it again. Set
+# NO_MODIFY_PATH=1 to keep the old warn-only behaviour and leave rc files alone.
 
 PREFIX ?= $(HOME)/.local
 
@@ -64,15 +71,38 @@ install: build
 	install -m 0755 $(BINDIR)/gf $(PREFIX)/bin/gf
 	ln -sf $(PREFIX)/bin/gf $(PREFIX)/bin/git-remote-gf
 	@echo "installed gf to $(PREFIX)/bin"
-	@case ":$$PATH:" in \
-	  *":$(PREFIX)/bin:"*) ;; \
-	  *) echo "warning: $(PREFIX)/bin is not in \$$PATH. Add to your shell rc:"; \
-	     echo "  export PATH=\"$(PREFIX)/bin:\$$PATH\"";; \
-	esac
+	@bindir="$(PREFIX)/bin"; \
+	case ":$$PATH:" in \
+	  *":$$bindir:"*) echo "$$bindir is already on \$$PATH — ready to use"; exit 0;; \
+	esac; \
+	line="export PATH=\"$$bindir:\$$PATH\""; \
+	if [ -n "$$NO_MODIFY_PATH" ]; then \
+	  echo "warning: $$bindir is not on \$$PATH. Add to your shell rc:"; \
+	  echo "  $$line"; \
+	  exit 0; \
+	fi; \
+	marker="# added by ghostfork gf installer"; \
+	case "$$(basename "$${SHELL:-/bin/sh}")" in \
+	  zsh)  rcs="$$HOME/.zshrc";; \
+	  bash) if [ "$$(uname)" = Darwin ]; then rcs="$$HOME/.bash_profile $$HOME/.bashrc"; else rcs="$$HOME/.bashrc"; fi;; \
+	  *)    rcs="$$HOME/.profile";; \
+	esac; \
+	added=0; \
+	for rc in $$rcs; do \
+	  if [ -f "$$rc" ] && grep -qF "$$marker" "$$rc"; then added=1; continue; fi; \
+	  printf '\n%s\n%s\n' "$$marker" "$$line" >> "$$rc" && echo "added $$bindir to \$$PATH in $$rc" && added=1; \
+	done; \
+	if [ "$$added" = 1 ]; then \
+	  echo "open a new terminal, or run now:  $$line"; \
+	else \
+	  echo "warning: could not update a shell rc; add manually:"; \
+	  echo "  $$line"; \
+	fi
 
 # Fully undoes `make install`: removes the gf binary and the git-remote-gf
-# symlink from $(PREFIX)/bin and reports each path removed. Use the same
-# PREFIX you installed with (e.g. sudo make uninstall PREFIX=/usr/local).
+# symlink from $(PREFIX)/bin, and strips the PATH line install added to your
+# shell rc (unless NO_MODIFY_PATH=1). Use the same PREFIX you installed with
+# (e.g. sudo make uninstall PREFIX=/usr/local).
 # User config (~/.config/gf) is intentionally left alone — it is created by
 # `gf login`, not by install, and holds your irreplaceable identity key.
 uninstall:
@@ -83,6 +113,14 @@ uninstall:
 	    removed=1; \
 	  fi; \
 	done; \
+	if [ -z "$$NO_MODIFY_PATH" ]; then \
+	  marker="# added by ghostfork gf installer"; \
+	  for rc in "$$HOME/.zshrc" "$$HOME/.bashrc" "$$HOME/.bash_profile" "$$HOME/.profile"; do \
+	    [ -f "$$rc" ] && grep -qF "$$marker" "$$rc" || continue; \
+	    awk -v m="$$marker" '{ if (skip>0) { skip--; next } } $$0==m { skip=1; next } { print }' "$$rc" > "$$rc.gftmp" \
+	      && mv "$$rc.gftmp" "$$rc" && echo "removed gf PATH entry from $$rc"; \
+	  done; \
+	fi; \
 	if [ "$$removed" = "0" ]; then \
 	  echo "nothing to uninstall — no gf files found in $(PREFIX)/bin"; \
 	else \
