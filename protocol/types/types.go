@@ -30,6 +30,9 @@ type CreateRepoRequest struct {
 // ── Refs ──────────────────────────────────────────────────────────────────────
 
 type Ref struct {
+	// Branch holds the full git ref name (refs/heads/<branch> or
+	// refs/tags/<tag>), not a bare branch name — so tags and slash-containing
+	// branch names round-trip. The JSON field stays "branch" for wire compat.
 	Branch    string `json:"branch"`
 	CommitSHA string `json:"commit_sha"`
 }

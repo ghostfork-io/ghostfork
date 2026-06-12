@@ -160,7 +160,9 @@ func (c *Client) GetRefs(owner, repo string) ([]types.Ref, error) {
 	return resp.Refs, err
 }
 
-// UpdateRef sets the tip SHA for a branch.
+// UpdateRef sets the tip SHA for a ref. branch is the full ref name
+// (refs/heads/<branch> or refs/tags/<tag>); url.PathEscape keeps its slashes
+// within a single path segment so the server receives the whole name.
 func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 	return c.doJSON(http.MethodPut, repoPath(owner, repo)+"/refs/"+url.PathEscape(branch),
 		types.UpdateRefRequest{CommitSHA: sha}, nil)

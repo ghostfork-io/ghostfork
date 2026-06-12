@@ -157,13 +157,16 @@ func (h *helper) handleList(w io.Writer) error {
 	}
 	slog.Debug("refs fetched", slog.Int("count", len(refs)))
 
+	// ref.Branch is the full ref name (refs/heads/<branch>, refs/tags/<tag>),
+	// so advertise it verbatim — anything else would misclassify tags as
+	// branches (or vice versa) on the receiving git.
 	for _, ref := range refs {
-		fmt.Fprintf(w, "%s refs/heads/%s\n", ref.CommitSHA, ref.Branch)
+		fmt.Fprintf(w, "%s %s\n", ref.CommitSHA, ref.Branch)
 	}
 
 	// Advertise HEAD → main when main exists so `git clone` checks out correctly.
 	for _, ref := range refs {
-		if ref.Branch == "main" {
+		if ref.Branch == "refs/heads/main" {
 			fmt.Fprintf(w, "@refs/heads/main HEAD\n")
 			break
 		}
@@ -466,13 +469,15 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 			base64.StdEncoding.EncodeToString(preview[:n]))
 	}
 
-	// The branch this push targets, recorded with the packfile so the server
-	// can report per-branch packfile counts, and reused for the ref update.
-	branch := strings.TrimPrefix(dst, "refs/heads/")
+	// The full ref name this push targets (refs/heads/<branch> or
+	// refs/tags/<tag>). Stored verbatim so tags — and branch names containing
+	// slashes — survive a round-trip; it also labels the packfile for the
+	// server's per-ref counts.
+	refName := dst
 
 	// Upload by streaming the temp file. UploadPackfile reads it to EOF; we
 	// keep the handle open until the call returns, then defer removes it.
-	seq, err := h.client.UploadPackfile(h.owner, h.repo, branch, tmp, size, bodyHash)
+	seq, err := h.client.UploadPackfile(h.owner, h.repo, refName, tmp, size, bodyHash)
 	tmp.Close()
 	if err != nil {
 		return fmt.Errorf("uploading packfile: %w", err)
@@ -480,11 +485,11 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	slog.Debug("upload complete — server assigned seq", slog.Int64("seq", seq))
 
 	// Update the remote ref tip.
-	if err := h.client.UpdateRef(h.owner, h.repo, branch, newSHA); err != nil {
+	if err := h.client.UpdateRef(h.owner, h.repo, refName, newSHA); err != nil {
 		return fmt.Errorf("updating ref: %w", err)
 	}
 	slog.Debug("ref updated",
-		slog.String("branch", branch),
+		slog.String("ref", refName),
 		slog.String("sha", newSHA),
 	)
 
