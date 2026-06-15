@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -53,6 +55,14 @@ func (id *Identity) Signer() ed25519.PrivateKey {
 // (base64-std of the 32 raw bytes).
 func (id *Identity) PublicKeyString() string {
 	return base64.StdEncoding.EncodeToString(id.PublicKey())
+}
+
+// PublicKeyFingerprint returns the SHA-256 of the raw Ed25519 public key as
+// lowercase hex. Safe to log — the public key is not secret — and handy for a
+// short, human-comparable identifier of which key is in play.
+func (id *Identity) PublicKeyFingerprint() string {
+	sum := sha256.Sum256(id.PublicKey())
+	return hex.EncodeToString(sum[:])
 }
 
 // SaveIdentity writes id to path with permissions 0600. The on-disk format

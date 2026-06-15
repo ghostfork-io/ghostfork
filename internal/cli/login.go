@@ -133,6 +133,12 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	}
 
 	slog.Debug("registering with server", slog.String("server", serverURL))
+	// Surface the key being sent so a `-v` run can confirm exactly which
+	// identity is registered (e.g. when juggling several accounts). The public
+	// key is not secret, so logging it — and its fingerprint — is safe.
+	slog.Debug("sending public key to server",
+		slog.String("fingerprint", id.PublicKeyFingerprint()),
+		slog.String("public_key", id.PublicKeyString()))
 	client := apiclient.New(serverURL)
 	if err := client.Register(username, id.PublicKeyString()); err != nil {
 		// An unreachable server already carries a clear, user-facing message;
@@ -226,6 +232,12 @@ func recoverFromFile(cmd *cobra.Command, serverURL, username, identityPath, cfgP
 // is "", the identity is assumed to already be on disk and only the config
 // is written.
 func verifyAndStore(_ *cobra.Command, serverURL, username, identityPath, cfgPath string, id *crypto.Identity) error {
+	// Recovery signs its requests with this key and checks it against what the
+	// server has on file; log the fingerprint so a `-v` run shows which key is
+	// being presented.
+	slog.Debug("verifying identity with server",
+		slog.String("fingerprint", id.PublicKeyFingerprint()),
+		slog.String("public_key", id.PublicKeyString()))
 	client := apiclient.NewAuthenticated(serverURL, username, id.Signer())
 	remote, err := client.GetUser(username)
 	if err != nil {
