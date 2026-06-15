@@ -460,11 +460,16 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 			tmp.Close()
 			return err
 		}
-		// Hex dump first, immediately after the SHA-256 line above so the two
-		// sit adjacent in the log. The format is byte-for-byte identical to the
-		// admin panel's Inspect view (toXxd), so a demo viewer can compare the
-		// client log against what the server logs line by line.
-		slog.Debug("encrypted packfile hex dump (first 10 KB):\n" + toXxd(preview[:n]))
+		// Hex dump in the exact xxd format the admin panel renders (toXxd) so a
+		// demo viewer can compare client and server byte for byte. slog's text
+		// handler would escape the newlines into one unreadable, "\n"-littered
+		// line, so write the multi-line block straight to stderr — where the
+		// user watches a debug push — framed by blank lines for readability.
+		// A copy still lands in the gf.log audit trail via slog, marked FileOnly
+		// so it does not also print the escaped version to stderr.
+		dump := toXxd(preview[:n])
+		fmt.Fprintf(os.Stderr, "\nencrypted packfile hex dump (first 10 KB):\n%s\n\n", dump)
+		slog.Debug("encrypted packfile hex dump (first 10 KB):\n"+dump, logging.FileOnly())
 		slog.Debug("encrypted packfile preview (first 10 KB, base64): " +
 			base64.StdEncoding.EncodeToString(preview[:n]))
 	}
