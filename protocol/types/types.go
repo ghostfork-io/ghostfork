@@ -1,5 +1,7 @@
 package types
 
+import "time"
+
 // ── Users ────────────────────────────────────────────────────────────────────
 
 // RegisterRequest creates a new account. PublicKey is the user's Ed25519
@@ -25,6 +27,10 @@ type UserResponse struct {
 type CreateRepoRequest struct {
 	Name         string `json:"name"`
 	EncryptedKey []byte `json:"encrypted_key"`
+	// Owner optionally names an org slug to create the repo under (the caller
+	// must be an admin of that org). Empty → a personal repo owned by the
+	// authenticated caller. The encrypted key is always wrapped to the caller.
+	Owner string `json:"owner,omitempty"`
 }
 
 // ── Refs ──────────────────────────────────────────────────────────────────────
@@ -69,4 +75,44 @@ type KeyRequest struct {
 
 type KeyResponse struct {
 	EncryptedKey []byte `json:"encrypted_key"`
+}
+
+// ── Orgs & membership (see docs/billing-and-tiers.md) ───────────────────────
+
+// CreateOrgRequest creates an org. The slug shares the flat namespace with
+// usernames and must not collide. The authenticated caller becomes first admin.
+type CreateOrgRequest struct {
+	Slug        string `json:"slug"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+// OrgResponse describes an org's billing state and size.
+type OrgResponse struct {
+	Slug          string     `json:"slug"`
+	DisplayName   string     `json:"display_name"`
+	PlanID        string     `json:"plan_id"`
+	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
+	MemberCount   int        `json:"member_count"`
+}
+
+// Member is one org member and their role ("member" | "admin").
+type Member struct {
+	Username string    `json:"username"`
+	Role     string    `json:"role"`
+	JoinedAt time.Time `json:"joined_at"`
+}
+
+type MembersResponse struct {
+	Members []Member `json:"members"`
+}
+
+// AddMemberRequest adds a user to an org. Role defaults to "member" when empty.
+type AddMemberRequest struct {
+	Username string `json:"username"`
+	Role     string `json:"role,omitempty"`
+}
+
+// SetRoleRequest promotes or demotes a member ("member" | "admin").
+type SetRoleRequest struct {
+	Role string `json:"role"`
 }
