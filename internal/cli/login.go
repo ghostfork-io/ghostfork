@@ -24,7 +24,14 @@ account on a new machine.
 
 What happens depends on what's on disk and which flags are set:
 
-  1. No identity file, no --recover → register a new account.
+  0. --password <pass> → log in to an account created on the web.
+     gf authenticates with the password. If the account has no key yet
+     (first login), a fresh Ed25519 keypair is generated locally and its
+     public key is uploaded. If the account already has a key, gf refuses
+     and tells you to recover with --recover instead. Give --password with
+     no value to be prompted (hidden), keeping it out of your shell history.
+
+  1. No identity file, no --recover, no --password → register a new account.
      A fresh Ed25519 keypair is generated locally, the public key is
      registered with the server, and the private key is written to
      ~/.config/gf/identity.ed25519 (0600).
@@ -66,6 +73,7 @@ func init() {
 	loginCmd.Flags().String("server", "", "server URL (required)")
 	loginCmd.Flags().String("username", "", "username to register or log in as (required)")
 	loginCmd.Flags().Bool("recover", false, "recover an existing account by providing the private key on stdin (hidden prompt on a TTY)")
+	loginCmd.Flags().String("password", "", "password for an account registered on the web; first login bootstraps a keypair (prompted hidden if the flag is given with no value)")
 	loginCmd.MarkFlagRequired("server")
 	loginCmd.MarkFlagRequired("username")
 }
@@ -74,6 +82,8 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 	serverURL, _ := cmd.Flags().GetString("server")
 	username, _ := cmd.Flags().GetString("username")
 	doRecover, _ := cmd.Flags().GetBool("recover")
+	password, _ := cmd.Flags().GetString("password")
+	passwordGiven := cmd.Flags().Changed("password")
 
 	// Reject a malformed --server before touching disk or the network, so the
 	// user gets an immediate, actionable error instead of a cryptic transport
@@ -89,6 +99,7 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		slog.String("server", serverURL),
 		slog.String("username", username),
 		slog.Bool("recover", doRecover),
+		slog.Bool("password", passwordGiven), // presence only — never the value
 		slog.String("identity_path", identityPath),
 		slog.String("config_path", cfgPath),
 	)
@@ -121,6 +132,14 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 				"To log in as a different user, use a different machine or delete\n"+
 				"%s first (destructive — see CLAUDE.md threat model on key loss)",
 			cfg.Username, cfg.ServerURL, identityPath)
+	}
+
+	// Password supplied → the account was created on the web and we authenticate
+	// with the password to either bootstrap a keypair (first login) or learn we
+	// must recover an existing one. This runs only when no identity is on disk
+	// (handled above), so it never clobbers a working key.
+	if passwordGiven {
+		return bootstrapLogin(cmd, serverURL, username, password, identityPath, cfgPath)
 	}
 
 	// No identity yet — fresh login. Generate the keypair in memory and
@@ -227,6 +246,90 @@ func recoverFromFile(cmd *cobra.Command, serverURL, username, identityPath, cfgP
 	return nil
 }
 
+// bootstrapLogin handles `gf login --password ...` for an account created on
+// the web. It authenticates with the password, then either generates a fresh
+// keypair and uploads its public key (first login on this account), or — if the
+// account already has a key — refuses and points the user at key recovery.
+//
+// It is only reached when no identity file exists locally, so it never
+// overwrites a working key.
+func bootstrapLogin(cmd *cobra.Command, serverURL, username, password, identityPath, cfgPath string) error {
+	// An explicit empty --password means "prompt me" (so the password never
+	// lands in shell history or the process list).
+	if password == "" {
+		var err error
+		password, err = readPassword(cmd)
+		if err != nil {
+			return err
+		}
+		if password == "" {
+			return fmt.Errorf("no password provided")
+		}
+	}
+
+	client := apiclient.New(serverURL)
+	slog.Debug("authenticating with password", slog.String("username", username))
+	resp, err := client.Login(username, password)
+	if err != nil {
+		var unreachable *apiclient.UnreachableError
+		if errors.As(err, &unreachable) {
+			return err
+		}
+		return fmt.Errorf(
+			"login failed for %q on %s — check the username and password.\n\n"+
+				"Underlying error: %w", username, serverURL, err)
+	}
+
+	// Account already has a key: this machine must restore the original private
+	// key rather than mint a new one (the server can't — it never had it).
+	if resp.HasPublicKey {
+		return fmt.Errorf(
+			"account %q already has a registered public key.\n"+
+				"To use it on this machine, restore your backed-up private key:\n\n"+
+				"    gf login --server %s --username %s --recover\n\n"+
+				"(paste the private key when prompted), or copy your identity file to\n"+
+				"%s and re-run 'gf login'. V1 has no key recovery if the key is lost.",
+			username, serverURL, username, identityPath)
+	}
+
+	// First login: generate the keypair locally and upload the public key.
+	slog.Debug("generating new identity")
+	id, err := crypto.GenerateIdentity()
+	if err != nil {
+		return fmt.Errorf("generating identity: %w", err)
+	}
+	slog.Debug("uploading public key to server",
+		slog.String("fingerprint", id.PublicKeyFingerprint()),
+		slog.String("public_key", id.PublicKeyString()))
+	if err := client.UploadPublicKey(username, password, id.PublicKeyString()); err != nil {
+		var unreachable *apiclient.UnreachableError
+		if errors.As(err, &unreachable) {
+			return err
+		}
+		return fmt.Errorf("uploading public key: %w", err)
+	}
+	slog.Debug("public key bootstrap complete")
+
+	if err := crypto.SaveIdentity(identityPath, id); err != nil {
+		return fmt.Errorf("saving identity: %w", err)
+	}
+	if err := config.Save(cfgPath, &config.Config{Username: username, ServerURL: serverURL}); err != nil {
+		return fmt.Errorf("saving config: %w", err)
+	}
+	slog.Debug("identity and config written",
+		slog.String("identity_path", identityPath),
+		slog.String("config_path", cfgPath),
+	)
+
+	fmt.Fprintf(cmd.OutOrStdout(), "\nLogged in as %s on %s.\n", username, serverURL)
+	fmt.Fprintf(cmd.OutOrStdout(), "A new keypair was generated and its public key registered.\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "Identity written to %s\n", identityPath)
+	fmt.Fprintf(cmd.OutOrStdout(), "Back this file up — V1 has no key recovery if it is lost.\n\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "Next step:\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "    gf init-repo <name>\n\n")
+	return nil
+}
+
 // verifyAndStore is the shared tail of both recovery paths: prove the
 // identity belongs to <username> on <server>, then persist. If identityPath
 // is "", the identity is assumed to already be on disk and only the config
@@ -278,6 +381,32 @@ func verifyAndStore(_ *cobra.Command, serverURL, username, identityPath, cfgPath
 		return fmt.Errorf("saving config: %w", err)
 	}
 	return nil
+}
+
+// readPassword reads an account password. On a TTY the input is hidden (like a
+// password prompt) so it does not appear on screen or in scrollback; when stdin
+// is piped, one line is read raw. Used by 'gf login --password' when the flag
+// is given with no value.
+func readPassword(cmd *cobra.Command) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		fmt.Fprint(cmd.ErrOrStderr(), "Password: ")
+		line, err := term.ReadPassword(fd)
+		fmt.Fprintln(cmd.ErrOrStderr())
+		if err != nil {
+			return "", fmt.Errorf("reading password from terminal: %w", err)
+		}
+		return string(line), nil
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil && err != io.EOF {
+			return "", fmt.Errorf("reading password from stdin: %w", err)
+		}
+		return "", fmt.Errorf("no password provided on stdin")
+	}
+	return scanner.Text(), nil
 }
 
 // readPrivateKey reads a base64-encoded Ed25519 seed from stdin. On a TTY

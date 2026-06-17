@@ -4,17 +4,48 @@ import "time"
 
 // ── Users ────────────────────────────────────────────────────────────────────
 
-// RegisterRequest creates a new account. PublicKey is the user's Ed25519
-// public key (base64-std of the 32 raw bytes). The same key is used both
-// for signing API requests (see docs/auth.md) and for wrapping repo keys
-// via age (see docs/crypto.md).
+// RegisterRequest creates a new account in one of two modes:
+//
+//   - Web registration: set Email + Password and leave PublicKey empty. The
+//     server stores a bcrypt hash and creates the account with a NULL public
+//     key, which the first 'gf login' fills in (see UploadPubKeyRequest).
+//   - Legacy CLI registration: set PublicKey and leave Email/Password empty.
+//     The same key is used both for signing API requests (see docs/auth.md) and
+//     for wrapping repo keys via age (see docs/crypto.md).
 type RegisterRequest struct {
 	Username  string `json:"username"`
-	PublicKey string `json:"public_key"`
+	PublicKey string `json:"public_key,omitempty"`
+	Email     string `json:"email,omitempty"`
+	Password  string `json:"password,omitempty"`
 }
 
 type UserResponse struct {
 	Username  string `json:"username"`
+	PublicKey string `json:"public_key"`
+}
+
+// LoginRequest authenticates a web-registered account by username + password.
+// Used by 'gf login' to discover whether the account already has a public key
+// before deciding to bootstrap one or prompt for key recovery.
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// LoginResponse reports whether the authenticated account already has a public
+// key on file. When false, the client may upload one (first login). When true,
+// the client must restore the original private key instead (key recovery).
+type LoginResponse struct {
+	Username     string `json:"username"`
+	HasPublicKey bool   `json:"has_public_key"`
+}
+
+// UploadPubKeyRequest uploads the public key generated on first 'gf login' for
+// a web-registered account. It is password-authenticated (not signed) because
+// the account has no key yet. The server stores the key only if none is set —
+// a second upload is rejected, so a stolen password cannot replace the key.
+type UploadPubKeyRequest struct {
+	Password  string `json:"password"`
 	PublicKey string `json:"public_key"`
 }
 

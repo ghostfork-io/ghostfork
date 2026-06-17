@@ -138,6 +138,26 @@ func (c *Client) GetUser(username string) (*types.UserResponse, error) {
 	return &resp, err
 }
 
+// Login authenticates a web-registered account by username + password and
+// reports whether it already has a public key on file. Called on an
+// unauthenticated client (the account may have no key yet). A 401 surfaces as
+// an "HTTP 401: ..." error.
+func (c *Client) Login(username, password string) (*types.LoginResponse, error) {
+	var resp types.LoginResponse
+	err := c.doJSON(http.MethodPost, "/api/v1/users/login",
+		types.LoginRequest{Username: username, Password: password}, &resp)
+	return &resp, err
+}
+
+// UploadPublicKey uploads the public key generated on first login for a
+// web-registered account, authenticating with the account password. Called on
+// an unauthenticated client. The server rejects a second upload (409), so this
+// only succeeds for an account whose key is still unset.
+func (c *Client) UploadPublicKey(username, password, publicKey string) error {
+	return c.doJSON(http.MethodPut, "/api/v1/users/"+url.PathEscape(username)+"/pubkey",
+		types.UploadPubKeyRequest{Password: password, PublicKey: publicKey}, nil)
+}
+
 // ── Repos ─────────────────────────────────────────────────────────────────────
 
 // CreateRepo creates a new repo and registers the caller as its first member.
