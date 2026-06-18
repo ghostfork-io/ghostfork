@@ -19,22 +19,21 @@ import (
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate with a Ghostfork server",
-	Long: `Register a new account on a Ghostfork server, or recover an existing
-account on a new machine.
+	Long: `Log in to a Ghostfork account, or recover one on a new machine.
+
+Accounts are created by registering on the web, not by this command. gf
+login authenticates against an existing account and sets up this machine's
+identity.
 
 What happens depends on what's on disk and which flags are set:
 
-  0. --password <pass> → log in to an account created on the web.
-     gf authenticates with the password. If the account has no key yet
-     (first login), a fresh Ed25519 keypair is generated locally and its
-     public key is uploaded. If the account already has a key, gf refuses
-     and tells you to recover with --recover instead. Give --password with
-     no value to be prompted (hidden), keeping it out of your shell history.
-
-  1. No identity file, no --recover, no --password → register a new account.
-     A fresh Ed25519 keypair is generated locally, the public key is
-     registered with the server, and the private key is written to
-     ~/.config/gf/identity.ed25519 (0600).
+  1. No identity yet → log in with your account password.
+     gf prompts for the password (use --password to pass or pipe it
+     instead). If the account has no key yet (first login), a fresh
+     Ed25519 keypair is generated locally and its public key is uploaded.
+     If the account already has a key, gf refuses and tells you to recover
+     with --recover instead. An unknown account fails the password check —
+     accounts are created by registering on the web, not here.
 
   2. --recover flag → paste your existing private key.
      gf prompts for the private key (hidden input on a TTY, or reads
@@ -55,25 +54,25 @@ There is no API token to keep secret: every request is signed live by
 your private key. Losing the identity file is equivalent to losing the
 account — V1 has no key recovery mechanism. Back up
 identity.ed25519 to a safe place.`,
-	Example: `  # First login on a new machine
+	Example: `  # First login after registering on the web (prompts for the password)
   gf login --server https://api.example.com --username alice
+
+  # Pass the password non-interactively (e.g. scripted; visible in process list)
+  gf login --server https://api.example.com --username alice --password "$PW"
 
   # Recover on a new machine via terminal paste (key is hidden as you type)
   gf login --server https://api.example.com --username alice --recover
 
   # Recover non-interactively (e.g. from a CI secret)
-  echo "$BACKED_UP_KEY" | gf login --server https://api.example.com --username alice --recover
-
-  # Idempotent check (already logged in)
-  gf login --server https://api.example.com --username alice`,
+  echo "$BACKED_UP_KEY" | gf login --server https://api.example.com --username alice --recover`,
 	RunE: runLogin,
 }
 
 func init() {
 	loginCmd.Flags().String("server", "", "server URL (required)")
-	loginCmd.Flags().String("username", "", "username to register or log in as (required)")
+	loginCmd.Flags().String("username", "", "username to log in as (required)")
 	loginCmd.Flags().Bool("recover", false, "recover an existing account by providing the private key on stdin (hidden prompt on a TTY)")
-	loginCmd.Flags().String("password", "", "password for an account registered on the web; first login bootstraps a keypair (prompted hidden if the flag is given with no value)")
+	loginCmd.Flags().String("password", "", "account password; if omitted, gf prompts for it (hidden). First login bootstraps a keypair")
 	loginCmd.MarkFlagRequired("server")
 	loginCmd.MarkFlagRequired("username")
 }
@@ -134,63 +133,13 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 			cfg.Username, cfg.ServerURL, identityPath)
 	}
 
-	// Password supplied → the account was created on the web and we authenticate
-	// with the password to either bootstrap a keypair (first login) or learn we
-	// must recover an existing one. This runs only when no identity is on disk
-	// (handled above), so it never clobbers a working key.
-	if passwordGiven {
-		return bootstrapLogin(cmd, serverURL, username, password, identityPath, cfgPath)
-	}
-
-	// No identity yet — fresh login. Generate the keypair in memory and
-	// register with the server before writing anything to disk, so a Register
-	// failure leaves no local state to clean up.
-	slog.Debug("generating new identity")
-	id, err := crypto.GenerateIdentity()
-	if err != nil {
-		return fmt.Errorf("generating identity: %w", err)
-	}
-
-	slog.Debug("registering with server", slog.String("server", serverURL))
-	// Surface the key being sent so a `-v` run can confirm exactly which
-	// identity is registered (e.g. when juggling several accounts). The public
-	// key is not secret, so logging it — and its fingerprint — is safe.
-	slog.Debug("sending public key to server",
-		slog.String("fingerprint", id.PublicKeyFingerprint()),
-		slog.String("public_key", id.PublicKeyString()))
-	client := apiclient.New(serverURL)
-	if err := client.Register(username, id.PublicKeyString()); err != nil {
-		// An unreachable server already carries a clear, user-facing message;
-		// don't bury it under a "registering with server:" prefix.
-		var unreachable *apiclient.UnreachableError
-		if errors.As(err, &unreachable) {
-			return err
-		}
-		return fmt.Errorf("registering with server: %w", err)
-	}
-	slog.Debug("server registration complete")
-
-	if err := crypto.SaveIdentity(identityPath, id); err != nil {
-		return fmt.Errorf("saving identity: %w", err)
-	}
-
-	cfg := &config.Config{
-		Username:  username,
-		ServerURL: serverURL,
-	}
-	if err := config.Save(cfgPath, cfg); err != nil {
-		return fmt.Errorf("saving config: %w", err)
-	}
-	slog.Debug("identity and config written",
-		slog.String("identity_path", identityPath),
-		slog.String("config_path", cfgPath),
-	)
-
-	fmt.Fprintf(cmd.OutOrStdout(), "\nLogged in as %s on %s.\n", username, serverURL)
-	fmt.Fprintf(cmd.OutOrStdout(), "Identity written to %s\n\n", identityPath)
-	fmt.Fprintf(cmd.OutOrStdout(), "Next step:\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "    gf init-repo <name>\n\n")
-	return nil
+	// No identity on disk: authenticate with the account password to bootstrap a
+	// key on first login (or learn the account already has one and must be
+	// recovered). The password is prompted for when not supplied on the command
+	// line, so a bare `gf login --username <name>` is enough. Accounts are
+	// created by web registration, not here — an unknown account fails the
+	// password check rather than being silently created.
+	return bootstrapLogin(cmd, serverURL, username, password, identityPath, cfgPath)
 }
 
 // recoverFromInput handles `gf login --recover`: the user pastes (or pipes)
