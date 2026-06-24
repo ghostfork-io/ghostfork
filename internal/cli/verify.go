@@ -99,7 +99,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		vline(out, "fetching packfile...", "(skipped — using local input)", "")
 		cipherPath = verifyInput
 	} else {
-		seqs, err := sess.client.ListPackfiles(owner, repo, 0)
+		seqs, _, err := sess.client.ListPackfiles(owner, repo, 0)
 		if err != nil {
 			return fmt.Errorf("listing packfiles for %s/%s: %w", owner, repo, err)
 		}

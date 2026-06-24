@@ -227,7 +227,7 @@ func TestListPackfilesReturnsAllSeqs(t *testing.T) {
 		uploadBytes(c, "alice", "repo", []byte("pack")) //nolint:errcheck
 	}
 
-	seqs, err := c.ListPackfiles("alice", "repo", 0)
+	seqs, _, err := c.ListPackfiles("alice", "repo", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestListPackfilesAfterN(t *testing.T) {
 		uploadBytes(c, "alice", "repo", []byte("pack")) //nolint:errcheck
 	}
 
-	seqs, err := c.ListPackfiles("alice", "repo", 2)
+	seqs, _, err := c.ListPackfiles("alice", "repo", 2)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -128,6 +128,11 @@ type PackfileEntry struct {
 
 type PackfileListResponse struct {
 	Packfiles []PackfileEntry `json:"packfiles"`
+	// Generation is the repo's current key generation. The client compares it
+	// against its last-seen value; a change means the repo was re-keyed (see
+	// key rotation) and the client must re-pull from the start of the new
+	// generation rather than only seq > last_seq.
+	Generation int `json:"generation"`
 }
 
 type UploadPackfileResponse struct {
@@ -141,6 +146,33 @@ type PackfileHashResponse struct {
 	Seq    int64  `json:"seq"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
+}
+
+// ── Key rotation ──────────────────────────────────────────────────────────────
+
+// KeyHoldersResponse lists the usernames that currently hold a wrapped repo
+// key (i.e. have access). The rotating client uses it to know whom to re-wrap
+// the new key for.
+type KeyHoldersResponse struct {
+	Users []string `json:"users"`
+}
+
+// RotateRequest commits a key rotation. ExpectedGeneration is the generation
+// the client based the rotation on (it must still match server-side, else the
+// commit is rejected as a conflict). WrappedKeys is the COMPLETE new membership:
+// each remaining user mapped to the new repo key encrypted with their public
+// key. Anyone absent loses access. The new consolidated packfile must already
+// have been staged via PUT .../rotate/packfile?generation=ExpectedGeneration.
+type RotateRequest struct {
+	ExpectedGeneration int               `json:"expected_generation"`
+	WrappedKeys        map[string][]byte `json:"wrapped_keys"`
+}
+
+// RotateResponse reports the repo's new key generation and the sequence number
+// assigned to the consolidated packfile.
+type RotateResponse struct {
+	Generation int   `json:"generation"`
+	Seq        int64 `json:"seq"`
 }
 
 // ── Keys ──────────────────────────────────────────────────────────────────────

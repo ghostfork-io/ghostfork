@@ -265,11 +265,18 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	}
 	slog.Info("unwrapped repo key [age: X25519 + ChaCha20-Poly1305] ✓ — server cannot read it")
 
-	seqs, err := h.client.ListPackfiles(h.owner, h.repo, st.LastSeq)
+	seqs, generation, err := h.client.ListPackfiles(h.owner, h.repo, st.LastSeq)
 	if err != nil {
 		return fmt.Errorf("listing packfiles: %w", err)
 	}
-	slog.Debug("packfiles to fetch", slog.Int("count", len(seqs)))
+	// After a key rotation the server replaces history with one consolidated
+	// packfile at a higher seq, so this incremental fetch (seq > last_seq)
+	// naturally pulls the full re-encrypted snapshot — no special handling
+	// needed. generation is logged for visibility.
+	slog.Debug("packfiles to fetch",
+		slog.Int("count", len(seqs)),
+		slog.Int("generation", generation),
+	)
 
 	if len(seqs) == 0 {
 		h.remotef("already up to date — no new packfiles")

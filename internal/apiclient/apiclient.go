@@ -263,18 +263,20 @@ func (c *Client) UploadPackfile(owner, repo, branch string, body io.Reader, size
 	return up.Seq, nil
 }
 
-// ListPackfiles returns all sequence numbers with seq > afterSeq.
-func (c *Client) ListPackfiles(owner, repo string, afterSeq int64) ([]int64, error) {
+// ListPackfiles returns all sequence numbers with seq > afterSeq, plus the
+// repo's current key generation. A generation change since the caller's last
+// fetch means the repo was re-keyed and the caller must re-pull from scratch.
+func (c *Client) ListPackfiles(owner, repo string, afterSeq int64) (seqs []int64, generation int, err error) {
 	path := repoPath(owner, repo) + "/packfiles?after=" + strconv.FormatInt(afterSeq, 10)
 	var resp types.PackfileListResponse
 	if err := c.doJSON(http.MethodGet, path, nil, &resp); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	seqs := make([]int64, len(resp.Packfiles))
+	seqs = make([]int64, len(resp.Packfiles))
 	for i, p := range resp.Packfiles {
 		seqs[i] = p.Seq
 	}
-	return seqs, nil
+	return seqs, resp.Generation, nil
 }
 
 // PackfileSHA256 fetches the server's recorded SHA-256 (and size) of one
@@ -330,6 +332,54 @@ func (c *Client) PutKey(owner, repo, username string, encKey []byte) error {
 // DeleteKey removes the encrypted repo key for username (revokes access).
 func (c *Client) DeleteKey(owner, repo, username string) error {
 	return c.doJSON(http.MethodDelete, repoPath(owner, repo)+"/keys/"+url.PathEscape(username), nil, nil)
+}
+
+// ── Key rotation ──────────────────────────────────────────────────────────────
+
+// ListKeyHolders returns the usernames that currently have access to the repo
+// (hold a wrapped key). Used by rotation to know whom to re-wrap for.
+func (c *Client) ListKeyHolders(owner, repo string) ([]string, error) {
+	var resp types.KeyHoldersResponse
+	err := c.doJSON(http.MethodGet, repoPath(owner, repo)+"/keys", nil, &resp)
+	return resp.Users, err
+}
+
+// StageRotationPackfile streams the new consolidated, re-encrypted packfile to
+// the server ahead of the atomic rotation commit. generation is the client's
+// current key generation; the server stages the blob at generation+1.
+// bodyHashHex is the SHA-256 of the streamed bytes (the server verifies it).
+func (c *Client) StageRotationPackfile(owner, repo string, generation int, body io.Reader, size int64, bodyHashHex string) error {
+	path := repoPath(owner, repo) + "/rotate/packfile?generation=" + strconv.Itoa(generation)
+	req, err := http.NewRequest(http.MethodPut, c.BaseURL+path, body)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/octet-stream")
+	c.signPrehashed(req, bodyHashHex)
+
+	resp, err := c.doStream(req, http.MethodPut, path)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+	}
+	return nil
+}
+
+// CommitRotation atomically commits the rotation: it sends the complete new
+// wrapped-key set (each remaining member → new repo key encrypted to them) and
+// the generation the rotation was based on. Returns the new generation/seq.
+func (c *Client) CommitRotation(owner, repo string, expectedGeneration int, wrappedKeys map[string][]byte) (*types.RotateResponse, error) {
+	var resp types.RotateResponse
+	err := c.doJSON(http.MethodPost, repoPath(owner, repo)+"/rotate", types.RotateRequest{
+		ExpectedGeneration: expectedGeneration,
+		WrappedKeys:        wrappedKeys,
+	}, &resp)
+	return &resp, err
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

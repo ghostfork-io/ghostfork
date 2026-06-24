@@ -93,6 +93,7 @@ func init() {
 	rootCmd.AddCommand(deleteVaultCmd)
 	rootCmd.AddCommand(addUserCmd)
 	rootCmd.AddCommand(removeUserCmd)
+	rootCmd.AddCommand(rotateKeyCmd)
 	rootCmd.AddCommand(switchUserCmd)
 	rootCmd.AddCommand(keyCmd)
 	rootCmd.AddCommand(verifyCmd)
