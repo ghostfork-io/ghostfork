@@ -89,6 +89,7 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(initVaultCmd)
 	rootCmd.AddCommand(deleteVaultCmd)
 	rootCmd.AddCommand(addUserCmd)
