@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -15,8 +16,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ghostfork/gf/crypto"
+	"github.com/ghostfork/gf/internal/logging"
 	"github.com/ghostfork/gf/protocol/auth"
 )
+
+// rotatePreviewLimit is how many ciphertext bytes of the re-encrypted packfile
+// are previewed (base64) under -v, mirroring the push demo logging.
+const rotatePreviewLimit = 10 * 1024
 
 var rotateKeyCmd = &cobra.Command{
 	Use:   "rotate-key <repo>",
@@ -89,7 +95,11 @@ func runRotateKey(cmd *cobra.Command, args []string) error {
 		}
 		pubs[u] = pub
 	}
-	slog.Debug("rotate-key members resolved", slog.Int("count", len(pubs)))
+	slog.Debug("rotate-key re-keying members",
+		slog.Int("count", len(pubs)),
+		slog.String("members", strings.Join(members, ", ")),
+		slog.Int("current_generation", generation),
+	)
 
 	// Obtain the full object set by cloning (the helper decrypts with the
 	// current key). A bare clone gives us every object and ref with no checkout.
@@ -113,14 +123,24 @@ func runRotateKey(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("generating new repo key: %w", err)
 	}
-	slog.Debug("new repo key generated")
+	// The plaintext key is logged only under explicit debug (-v /
+	// GHOSTFORK_LOG_LEVEL=debug), never by default — mirroring init-repo. It lets
+	// a demo show the new key being born locally; it leaves the machine only
+	// wrapped per member below.
+	slog.Debug("generated new repo sym key (client-side)")
+	if logging.DebugRequested(verbose) {
+		slog.Debug("new repo sym key (plaintext, hex): " + hex.EncodeToString(newKey))
+	}
 
 	encPath, size, bodyHash, err := buildConsolidatedPack(cloneDir, newKey)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(encPath)
-	slog.Debug("consolidated packfile built", slog.Int64("encrypted_bytes", size), slog.String("sha256", bodyHash))
+	slog.Debug("re-encrypted full history into one packfile", slog.Int64("encrypted_bytes", size))
+	// SHA-256 of the ciphertext, logged before upload so it can be matched
+	// against the server's stored blob (admin Inspect view / sha256sum).
+	slog.Debug("re-encrypted packfile SHA-256: " + bodyHash)
 
 	// Stage the new packfile, then commit the atomic swap with the new wrapped
 	// keys for every member.
@@ -129,23 +149,45 @@ func runRotateKey(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer f.Close()
+
+	if logging.DebugRequested(verbose) {
+		preview := make([]byte, rotatePreviewLimit)
+		n, _ := io.ReadFull(f, preview)
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		slog.Debug("re-encrypted packfile preview (first 10 KB, base64): " +
+			base64.StdEncoding.EncodeToString(preview[:n]))
+	}
+
+	slog.Debug("uploading re-encrypted packfile to server (staging)", slog.Int64("bytes", size))
 	if err := sess.client.StageRotationPackfile(owner, repo, generation, f, size, bodyHash); err != nil {
 		return fmt.Errorf("staging re-encrypted packfile: %w", err)
 	}
 
+	// Re-wrap the new key for each remaining member: encrypt it to their public
+	// key, client-side. The base64 blobs are ciphertext (safe to log); the
+	// server only ever receives these wrapped copies, never the plaintext key.
 	wrapped := make(map[string][]byte, len(pubs))
 	for u, pub := range pubs {
+		slog.Debug(fmt.Sprintf("encrypting new repo sym key with %s's public key (client-side operation)", u))
 		ek, err := crypto.EncryptRepoKey(newKey, pub)
 		if err != nil {
 			return fmt.Errorf("wrapping new key for %q: %w", u, err)
 		}
+		slog.Debug(fmt.Sprintf("encrypted new repo sym key for %s (base64): %s",
+			u, base64.StdEncoding.EncodeToString(ek)))
 		wrapped[u] = ek
 	}
 
+	slog.Debug("committing rotation on server (atomic swap: packfiles + wrapped keys + generation)",
+		slog.Int("members", len(wrapped)))
 	resp, err := sess.client.CommitRotation(owner, repo, generation, wrapped)
 	if err != nil {
 		return fmt.Errorf("committing rotation: %w", err)
 	}
+	slog.Debug("rotation committed on server",
+		slog.Int("generation", resp.Generation), slog.Int64("seq", resp.Seq))
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "\nRotated %s/%s to key generation %d.\n", owner, repo, resp.Generation)
