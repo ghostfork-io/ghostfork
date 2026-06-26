@@ -98,6 +98,15 @@ type UploadPackfileResponse struct {
 	Seq int64 `json:"seq"`
 }
 
+// PackfileHashResponse reports the server's SHA-256 (and size) of one stored
+// encrypted packfile blob, so a client (gf verify) can confirm the ciphertext
+// it downloaded matches the server's record before decrypting it.
+type PackfileHashResponse struct {
+	Seq    int64  `json:"seq"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
 // ── Keys ──────────────────────────────────────────────────────────────────────
 
 type KeyRequest struct {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,11 +21,16 @@ func main() {
 		return
 	}
 	if err := cli.Execute(); err != nil {
-		// Pad the error like the commands pad their success output: a leading
-		// blank line and a trailing blank line so it doesn't crowd the command
-		// or the next prompt. The "Error:" prefix labels what follows, which may
-		// be a multi-line message.
-		fmt.Fprintf(os.Stderr, "\nError: %v\n\n", err)
+		// ErrSilent means the command already printed its own user-facing
+		// failure output (e.g. gf verify's "decryption aborted") — just exit
+		// non-zero without crowding it with an "Error:" line.
+		if !errors.Is(err, cli.ErrSilent) {
+			// Pad the error like the commands pad their success output: a leading
+			// blank line and a trailing blank line so it doesn't crowd the command
+			// or the next prompt. The "Error:" prefix labels what follows, which
+			// may be a multi-line message.
+			fmt.Fprintf(os.Stderr, "\nError: %v\n\n", err)
+		}
 		os.Exit(1)
 	}
 }

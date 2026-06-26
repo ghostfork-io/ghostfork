@@ -246,6 +246,18 @@ func (c *Client) ListPackfiles(owner, repo string, afterSeq int64) ([]int64, err
 	return seqs, nil
 }
 
+// PackfileSHA256 fetches the server's recorded SHA-256 (and size) of one
+// stored encrypted packfile, so the caller (gf verify) can confirm a downloaded
+// blob matches the server's bytes before decrypting it.
+func (c *Client) PackfileSHA256(owner, repo string, seq int64) (sha256hex string, size int64, err error) {
+	path := repoPath(owner, repo) + "/packfiles/" + strconv.FormatInt(seq, 10) + "/sha256"
+	var resp types.PackfileHashResponse
+	if err := c.doJSON(http.MethodGet, path, nil, &resp); err != nil {
+		return "", 0, err
+	}
+	return resp.SHA256, resp.Size, nil
+}
+
 // DownloadPackfile streams one packfile's encrypted bytes. The caller MUST
 // Close the returned reader. The caller is responsible for piping the bytes
 // through DecryptPackfile and on into git's index-pack.
