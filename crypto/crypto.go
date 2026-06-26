@@ -23,6 +23,14 @@ import (
 // chunkSize is the plaintext size of each encrypted chunk in a packfile.
 const chunkSize = 64 * 1024 // 64 KiB
 
+// ChunkSize is the plaintext chunk size, exported so callers (e.g. the helper's
+// progress/crypto narration) can report the chunk count accurately.
+const ChunkSize = chunkSize
+
+// NonceSize is the XChaCha20-Poly1305 nonce length in bytes (192-bit),
+// prepended once to every encrypted packfile.
+const NonceSize = chacha20poly1305.NonceSizeX
+
 // Identity is a user's Ed25519 keypair. The same key is used both for
 // signing API requests (see shared/auth) and for wrapping per-repo
 // encryption keys via age's SSH-key compatibility (see docs/crypto.md).

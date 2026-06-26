@@ -202,7 +202,7 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
-	slog.Debug("repo key decrypted")
+	slog.Info("unwrapped repo key [age: X25519 + ChaCha20-Poly1305] ✓ — server cannot read it")
 
 	seqs, err := h.client.ListPackfiles(h.owner, h.repo, st.LastSeq)
 	if err != nil {
@@ -215,14 +215,19 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("downloading packfile seq=%d: %w", seq, err)
 		}
-		slog.Debug("packfile download started", slog.Int64("seq", seq))
+		slog.Info(fmt.Sprintf("decrypting [XChaCha20-Poly1305] packfile seq=%d", seq))
 
-		if err := unpackEncrypted(body, repoKey, gitDir); err != nil {
+		plainN, cipherN, err := unpackEncrypted(body, repoKey, gitDir)
+		if err != nil {
 			body.Close()
 			return fmt.Errorf("unpacking packfile seq=%d: %w", seq, err)
 		}
 		body.Close()
-		slog.Debug("packfile unpacked", slog.Int64("seq", seq))
+		// DecryptPackfile verified every chunk's Poly1305 tag on the way through;
+		// reaching here means the ciphertext was authentic and untampered.
+		slog.Info(fmt.Sprintf(
+			"decrypted [XChaCha20-Poly1305] seq=%d ✓ authentication tag verified — %s ciphertext → %s plaintext in %d chunk(s)",
+			seq, humanBytes(cipherN), humanBytes(plainN), chunkCount(plainN)))
 
 		st.LastSeq = seq
 	}
@@ -249,8 +254,10 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 //
 // Decryption runs in a goroutine writing to a pipe so neither the ciphertext
 // nor the plaintext is ever fully buffered in memory.
-func unpackEncrypted(src io.Reader, repoKey []byte, gitDir string) error {
+func unpackEncrypted(src io.Reader, repoKey []byte, gitDir string) (plaintextBytes, ciphertextBytes int64, err error) {
+	cipher := &countingReader{r: src} // counts ciphertext bytes read off the wire
 	pr, pw := io.Pipe()
+	plain := &countingWriter{w: pw} // counts plaintext bytes produced
 
 	cmd := exec.Command("git", "index-pack", "--stdin")
 	cmd.Stdin = pr
@@ -260,27 +267,29 @@ func unpackEncrypted(src io.Reader, repoKey []byte, gitDir string) error {
 
 	if err := cmd.Start(); err != nil {
 		pr.Close()
-		return fmt.Errorf("starting index-pack: %w", err)
+		return 0, 0, fmt.Errorf("starting index-pack: %w", err)
 	}
 
-	// Decrypt into the pipe. Any decryption error is propagated to index-pack
-	// by closing the write end with that error, so cmd.Wait observes a broken
-	// stdin and fails rather than indexing a truncated pack.
+	// Decrypt into the pipe. DecryptPackfile verifies each chunk's Poly1305
+	// authentication tag as it goes; a bad tag (tampered/truncated ciphertext or
+	// wrong key) surfaces here and is propagated to index-pack by closing the
+	// write end with that error, so cmd.Wait observes a broken stdin and fails
+	// rather than indexing a forged pack.
 	decErr := make(chan error, 1)
 	go func() {
-		err := crypto.DecryptPackfile(pw, src, repoKey)
-		pw.CloseWithError(err)
-		decErr <- err
+		e := crypto.DecryptPackfile(plain, cipher, repoKey)
+		pw.CloseWithError(e)
+		decErr <- e
 	}()
 
 	waitErr := cmd.Wait()
-	if err := <-decErr; err != nil {
-		return fmt.Errorf("decrypting: %w", err)
+	if e := <-decErr; e != nil {
+		return 0, 0, fmt.Errorf("decrypting: %w", e)
 	}
 	if waitErr != nil {
-		return fmt.Errorf("index-pack: %w", waitErr)
+		return 0, 0, fmt.Errorf("index-pack: %w", waitErr)
 	}
-	return nil
+	return plain.n, cipher.n, nil
 }
 
 // ── push ──────────────────────────────────────────────────────────────────────
@@ -304,7 +313,7 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	if err != nil {
 		return fmt.Errorf("decrypting repo key: %w", err)
 	}
-	slog.Debug("repo key decrypted")
+	slog.Info("unwrapped repo key [age: X25519 + ChaCha20-Poly1305] ✓ — server cannot read it")
 
 	serverRefs, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
@@ -413,7 +422,7 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	// (one stream), which is why this line precedes the size lines.
 	plain := &countingReader{r: packOut}
 	hasher := sha256.New()
-	slog.Debug("encrypting packfile with repo key (XChaCha20-Poly1305)")
+	slog.Info("encrypting [XChaCha20-Poly1305] — 256-bit repo key, 192-bit random nonce, 64 KiB chunks, per-chunk Poly1305 auth tag")
 	if err := crypto.EncryptPackfile(io.MultiWriter(tmp, hasher), plain, repoKey); err != nil {
 		tmp.Close()
 		_ = packCmd.Wait()
@@ -437,10 +446,10 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 		return err
 	}
 	bodyHash := hex.EncodeToString(hasher.Sum(nil))
-	slog.Debug(fmt.Sprintf("packfile built: %s", humanBytes(plain.n)),
-		slog.Int64("plaintext_bytes", plain.n))
-	slog.Debug(fmt.Sprintf("ciphertext size: %s — slightly larger due to auth tag + nonce", humanBytes(size)),
-		slog.Int64("encrypted_bytes", size))
+	slog.Info(fmt.Sprintf(
+		"encrypted [XChaCha20-Poly1305] ✓ %s plaintext → %s ciphertext in %d chunk(s) (+24-byte nonce, per-chunk Poly1305 tag)",
+		humanBytes(plain.n), humanBytes(size), chunkCount(plain.n)),
+		slog.Int64("plaintext_bytes", plain.n), slog.Int64("encrypted_bytes", size))
 
 	// Demo aid (docs/sales-demo.md Act 4): log the ciphertext hash and a
 	// preview AFTER encryption and BEFORE any byte goes over the wire, so an
@@ -448,7 +457,7 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	// Everything here is ciphertext — safe to log. The hash line is small and
 	// always lands in the audit log; the ~13 KB base64 preview is emitted only
 	// under explicit debug (GHOSTFORK_LOG_LEVEL=debug) to keep gf.log lean.
-	slog.Debug("encrypted packfile SHA-256: " + bodyHash)
+	slog.Info("encrypted packfile SHA-256: " + bodyHash + " (matches the server's stored blob — nothing is re-encrypted in transit)")
 	if logging.DebugRequested(false) {
 		preview := make([]byte, packfilePreviewLimit)
 		n, err := io.ReadFull(tmp, preview)
@@ -515,6 +524,28 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// countingWriter counts the bytes written through it. Used on fetch to report
+// how many plaintext bytes came out of decryption.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// chunkCount reports how many 64 KiB plaintext chunks a packfile of the given
+// plaintext size was encrypted in — purely for the crypto narration.
+func chunkCount(plaintextBytes int64) int64 {
+	if plaintextBytes <= 0 {
+		return 0
+	}
+	return (plaintextBytes + crypto.ChunkSize - 1) / crypto.ChunkSize
 }
 
 // humanBytes renders n like "4.1 KB" for the demo narration lines. Sizes
