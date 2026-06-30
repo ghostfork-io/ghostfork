@@ -73,6 +73,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "log debug-level details to stderr")
 
 	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(logoutCmd)
 	rootCmd.AddCommand(initRepoCmd)
 	rootCmd.AddCommand(addUserCmd)
 	rootCmd.AddCommand(removeUserCmd)
