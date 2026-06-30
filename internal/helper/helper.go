@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/ghostfork/gf/crypto"
@@ -70,11 +71,13 @@ func Run() {
 	)
 
 	h := &helper{
-		owner:    owner,
-		repo:     repo,
-		cfg:      cfg,
-		identity: id,
-		client:   apiclient.NewAuthenticated(cfg.ServerURL, cfg.Username, id.Signer()),
+		owner:     owner,
+		repo:      repo,
+		cfg:       cfg,
+		identity:  id,
+		client:    apiclient.NewAuthenticated(cfg.ServerURL, cfg.Username, id.Signer()),
+		progress:  true, // git turns this off via `option progress false` (--quiet / non-tty)
+		verbosity: 1,
 	}
 
 	if err := h.run(os.Stdin, os.Stdout); err != nil {
@@ -90,6 +93,14 @@ type helper struct {
 	cfg      *config.Config
 	identity *crypto.Identity
 	client   *apiclient.Client
+
+	// Display options git negotiates over the helper protocol before fetch/push.
+	// When progress is on (a normal interactive clone/pull), we narrate the
+	// encrypted transfer on stderr like a git server's `remote:` sideband;
+	// --quiet or a non-terminal turns it off. Defaults match git's own: progress
+	// on, verbosity 1.
+	progress  bool
+	verbosity int
 }
 
 // run drives the line-protocol loop with git over r/w.
@@ -101,7 +112,8 @@ func (h *helper) run(r io.Reader, w io.Writer) error {
 
 		switch {
 		case line == "capabilities":
-			fmt.Fprintf(w, "fetch\npush\n\n")
+			// `option` lets git negotiate progress/verbosity with us before fetch.
+			fmt.Fprintf(w, "option\nfetch\npush\n\n")
 
 		case line == "list" || line == "list for-push":
 			if err := h.handleList(w); err != nil {
@@ -135,7 +147,7 @@ func (h *helper) run(r io.Reader, w io.Writer) error {
 			}
 
 		case strings.HasPrefix(line, "option "):
-			fmt.Fprintln(w, "unsupported")
+			h.handleOption(w, strings.TrimPrefix(line, "option "))
 
 		case line == "":
 			// trailing blank line — ignore
@@ -145,6 +157,40 @@ func (h *helper) run(r io.Reader, w io.Writer) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// handleOption records the display options git negotiates before a transfer.
+// We honour `progress` and `verbosity` (they gate our remote: narration) and
+// report every other option as unsupported so git keeps its default behaviour.
+func (h *helper) handleOption(w io.Writer, arg string) {
+	name, value, _ := strings.Cut(arg, " ")
+	switch name {
+	case "progress":
+		h.progress = value == "true"
+		fmt.Fprintln(w, "ok")
+	case "verbosity":
+		if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			h.verbosity = n
+		}
+		fmt.Fprintln(w, "ok")
+	default:
+		fmt.Fprintln(w, "unsupported")
+	}
+}
+
+// showProgress reports whether to print user-facing transfer narration, matching
+// git: on for an interactive clone/pull, off under --quiet or a non-terminal.
+func (h *helper) showProgress() bool { return h.progress && h.verbosity >= 1 }
+
+// remotef prints a human-facing progress line to stderr, prefixed `remote:` the
+// way a git server's sideband messages appear — so a `git clone`/`git pull` over
+// a gf:// remote shows the encrypted transfer happening instead of sitting
+// silent. stdout is the helper protocol channel, so this must go to stderr.
+func (h *helper) remotef(format string, args ...any) {
+	if !h.showProgress() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "remote: "+format+"\n", args...)
 }
 
 // ── list ──────────────────────────────────────────────────────────────────────
@@ -210,7 +256,14 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	}
 	slog.Debug("packfiles to fetch", slog.Int("count", len(seqs)))
 
-	for _, seq := range seqs {
+	if len(seqs) == 0 {
+		h.remotef("already up to date — no new packfiles")
+	} else {
+		h.remotef("%d encrypted packfile(s) to fetch", len(seqs))
+	}
+
+	for i, seq := range seqs {
+		h.remotef("receiving packfile %d/%d...", i+1, len(seqs))
 		body, err := h.client.DownloadPackfile(h.owner, h.repo, seq)
 		if err != nil {
 			return fmt.Errorf("downloading packfile seq=%d: %w", seq, err)
@@ -228,8 +281,14 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 		slog.Info(fmt.Sprintf(
 			"decrypted [XChaCha20-Poly1305] seq=%d ✓ authentication tag verified — %s ciphertext → %s plaintext in %d chunk(s)",
 			seq, humanBytes(cipherN), humanBytes(plainN), chunkCount(plainN)))
+		h.remotef("packfile %d/%d decrypted [XChaCha20-Poly1305] ✓ tag verified, %s → %s, unpacked",
+			i+1, len(seqs), humanBytes(cipherN), humanBytes(plainN))
 
 		st.LastSeq = seq
+	}
+
+	if len(seqs) > 0 {
+		h.remotef("done — %d packfile(s) received and authenticated", len(seqs))
 	}
 
 	// Persist state only after every packfile has been successfully unpacked.
