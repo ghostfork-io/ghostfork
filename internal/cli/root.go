@@ -74,6 +74,7 @@ func init() {
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
+	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(initRepoCmd)
 	rootCmd.AddCommand(addUserCmd)
 	rootCmd.AddCommand(removeUserCmd)
