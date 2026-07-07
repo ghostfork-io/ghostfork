@@ -22,23 +22,28 @@ const testToken = "746573742d746f6b656e2d746573742d746f6b656e2d746573742d746f6b6
 // testOrigin is the dashboard origin startTestServer admits via CORS.
 const testOrigin = "https://gf.example.com"
 
-// fakeRepoLister is a canned RepoLister.
-type fakeRepoLister struct {
+// fakeUpstream is a canned Upstream.
+type fakeUpstream struct {
 	repos []types.RepoRef
+	refs  []types.Ref
 	err   error
 }
 
-func (f *fakeRepoLister) ListMyRepos() ([]types.RepoRef, error) { return f.repos, f.err }
+func (f *fakeUpstream) ListMyRepos() ([]types.RepoRef, error) { return f.repos, f.err }
+
+func (f *fakeUpstream) GetRefs(owner, repo string) ([]types.Ref, error) {
+	return f.refs, f.err
+}
 
 // startTestServer binds an ephemeral loopback port and runs the server until
 // the test ends, returning its base URL.
 func startTestServer(t *testing.T, opt ...func(*Options)) string {
 	t.Helper()
 	opts := Options{
-		Port:   0,
-		Token:  testToken,
-		Origin: testOrigin,
-		Repos:  &fakeRepoLister{},
+		Port:     0,
+		Token:    testToken,
+		Origin:   testOrigin,
+		Upstream: &fakeUpstream{},
 	}
 	for _, o := range opt {
 		o(&opts)
@@ -256,7 +261,7 @@ func TestHealthzNeedsNoToken(t *testing.T) {
 
 func TestReposEndpoint(t *testing.T) {
 	repos := []types.RepoRef{{Owner: "alice", Name: "app"}, {Owner: "acme", Name: "lib"}}
-	base := startTestServer(t, func(o *Options) { o.Repos = &fakeRepoLister{repos: repos} })
+	base := startTestServer(t, func(o *Options) { o.Upstream = &fakeUpstream{repos: repos} })
 
 	resp := get(t, base+"/v1/repos", testToken)
 	if resp.StatusCode != http.StatusOK {
@@ -298,7 +303,7 @@ func TestReposUpstreamErrorMapping(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			base := startTestServer(t, func(o *Options) { o.Repos = &fakeRepoLister{err: tc.err} })
+			base := startTestServer(t, func(o *Options) { o.Upstream = &fakeUpstream{err: tc.err} })
 			resp := get(t, base+"/v1/repos", testToken)
 			if resp.StatusCode != tc.wantStatus {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
@@ -307,6 +312,86 @@ func TestReposUpstreamErrorMapping(t *testing.T) {
 				t.Errorf("error code = %q, want %q", body.Error, tc.wantCode)
 			}
 		})
+	}
+}
+
+func TestRefsEndpoint(t *testing.T) {
+	base := startTestServer(t, func(o *Options) {
+		o.Upstream = &fakeUpstream{refs: []types.Ref{
+			{Branch: "refs/tags/v1.0", CommitSHA: "c3"},
+			{Branch: "refs/heads/main", CommitSHA: "c1"},
+			{Branch: "refs/heads/dev", CommitSHA: "c2"},
+			{Branch: "legacy", CommitSHA: "c4"}, // bare pre-full-ref-name row
+		}}
+	})
+
+	resp := get(t, base+"/v1/repos/alice/app/refs", testToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var body refsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	want := []refEntry{
+		{Name: "dev", Type: "branch", SHA: "c2"},
+		{Name: "legacy", Type: "branch", SHA: "c4"},
+		{Name: "main", Type: "branch", SHA: "c1"},
+		{Name: "v1.0", Type: "tag", SHA: "c3"},
+	}
+	if len(body.Refs) != len(want) {
+		t.Fatalf("refs = %v, want %v", body.Refs, want)
+	}
+	for i := range want {
+		if body.Refs[i] != want[i] {
+			t.Errorf("refs[%d] = %v, want %v", i, body.Refs[i], want[i])
+		}
+	}
+	if body.Default != "main" {
+		t.Errorf("default = %q, want main", body.Default)
+	}
+}
+
+func TestRefsDefaultBranchFallbacks(t *testing.T) {
+	cases := []struct {
+		name string
+		refs []types.Ref
+		want string
+	}{
+		{"main wins", []types.Ref{{Branch: "refs/heads/master"}, {Branch: "refs/heads/main"}}, "main"},
+		{"master next", []types.Ref{{Branch: "refs/heads/zeta"}, {Branch: "refs/heads/master"}}, "master"},
+		{"alphabetical fallback", []types.Ref{{Branch: "refs/heads/zeta"}, {Branch: "refs/heads/alpha"}}, "alpha"},
+		{"tags never default", []types.Ref{{Branch: "refs/tags/v1.0"}}, ""},
+		{"empty repo", nil, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := startTestServer(t, func(o *Options) { o.Upstream = &fakeUpstream{refs: tc.refs} })
+			resp := get(t, base+"/v1/repos/alice/app/refs", testToken)
+			var body refsResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decoding: %v", err)
+			}
+			if body.Default != tc.want {
+				t.Errorf("default = %q, want %q", body.Default, tc.want)
+			}
+		})
+	}
+}
+
+func TestRefsRepoNotFound(t *testing.T) {
+	// The server answers 403 for unknown repo and no-access alike; both must
+	// surface as the contract's repo_not_found.
+	base := startTestServer(t, func(o *Options) {
+		o.Upstream = &fakeUpstream{err: &apiclient.StatusError{StatusCode: 403, Body: "forbidden"}}
+	})
+
+	resp := get(t, base+"/v1/repos/alice/gone/refs", testToken)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	if body := decodeError(t, resp); body.Error != "repo_not_found" {
+		t.Errorf("error code = %q, want repo_not_found", body.Error)
 	}
 }
 

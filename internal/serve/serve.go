@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -39,10 +40,11 @@ type Server struct {
 	httpSrv *http.Server
 }
 
-// RepoLister is the slice of the API client the repos endpoint needs; tests
-// substitute a fake.
-type RepoLister interface {
+// Upstream is the slice of the signed API client the helper's endpoints
+// need; tests substitute a fake.
+type Upstream interface {
 	ListMyRepos() ([]types.RepoRef, error)
+	GetRefs(owner, repo string) ([]types.Ref, error)
 }
 
 // Options configures the local server.
@@ -55,8 +57,8 @@ type Options struct {
 	// Origin is the dashboard's web origin (scheme://host[:port] of the
 	// configured server), the only origin CORS admits. See Origin().
 	Origin string
-	// Repos answers the /v1/repos listing.
-	Repos RepoLister
+	// Upstream answers the data endpoints from the gf server.
+	Upstream Upstream
 }
 
 // Origin derives the dashboard origin CORS must admit from the configured
@@ -122,7 +124,8 @@ func newHandler(opts Options) http.Handler {
 	// are born behind auth.
 	v1 := http.NewServeMux()
 	v1.HandleFunc("/", handleV1NotFound)
-	v1.HandleFunc("GET /v1/repos", handleRepos(opts.Repos))
+	v1.HandleFunc("GET /v1/repos", handleRepos(opts.Upstream))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/refs", handleRefs(opts.Upstream))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleRoot)
@@ -136,13 +139,9 @@ func newHandler(opts Options) http.Handler {
 
 // ── Repos ────────────────────────────────────────────────────────────────────
 
-func handleRepos(lister RepoLister) http.HandlerFunc {
+func handleRepos(up Upstream) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if lister == nil {
-			writeError(w, http.StatusInternalServerError, "internal", "repo listing is not wired up")
-			return
-		}
-		repos, err := lister.ListMyRepos()
+		repos, err := up.ListMyRepos()
 		if err != nil {
 			writeUpstreamError(w, "listing repos", err)
 			return
@@ -152,6 +151,81 @@ func handleRepos(lister RepoLister) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, types.MyReposResponse{Repos: repos})
 	}
+}
+
+// ── Refs ─────────────────────────────────────────────────────────────────────
+
+// refEntry is one branch or tag in the refs response (docs/gf-serve-api.md).
+type refEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "branch" | "tag"
+	SHA  string `json:"sha"`
+}
+
+type refsResponse struct {
+	Refs []refEntry `json:"refs"`
+	// Default is the branch the dashboard should preselect: main, else
+	// master, else the first branch alphabetically (the server doesn't track
+	// HEAD). Omitted when the repo has no branches yet.
+	Default string `json:"default,omitempty"`
+}
+
+func handleRefs(up Upstream) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		owner, repo := r.PathValue("owner"), r.PathValue("repo")
+		refs, err := up.GetRefs(owner, repo)
+		if err != nil {
+			writeRepoUpstreamError(w, "listing refs", err)
+			return
+		}
+
+		out := refsResponse{Refs: []refEntry{}}
+		for _, ref := range refs {
+			e := refEntry{SHA: ref.CommitSHA}
+			switch {
+			case strings.HasPrefix(ref.Branch, "refs/heads/"):
+				e.Name, e.Type = strings.TrimPrefix(ref.Branch, "refs/heads/"), "branch"
+			case strings.HasPrefix(ref.Branch, "refs/tags/"):
+				e.Name, e.Type = strings.TrimPrefix(ref.Branch, "refs/tags/"), "tag"
+			default:
+				// Pre-full-ref-name rows stored bare branch names.
+				e.Name, e.Type = ref.Branch, "branch"
+			}
+			out.Refs = append(out.Refs, e)
+		}
+		// Branches before tags, each alphabetical — a stable order the
+		// dashboard can render as-is.
+		sort.Slice(out.Refs, func(i, j int) bool {
+			a, b := out.Refs[i], out.Refs[j]
+			if a.Type != b.Type {
+				return a.Type == "branch"
+			}
+			return a.Name < b.Name
+		})
+		out.Default = defaultBranch(out.Refs)
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+func defaultBranch(refs []refEntry) string {
+	first := ""
+	for _, ref := range refs {
+		if ref.Type != "branch" {
+			continue
+		}
+		if ref.Name == "main" {
+			return "main"
+		}
+		if first == "" || ref.Name < first {
+			first = ref.Name
+		}
+	}
+	for _, ref := range refs {
+		if ref.Type == "branch" && ref.Name == "master" {
+			return "master"
+		}
+	}
+	return first
 }
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -196,6 +270,22 @@ func writeUpstreamError(w http.ResponseWriter, doing string, err error) {
 	// Details go to the helper log; the browser gets a generic message.
 	slog.Error("serve upstream error", slog.String("doing", doing), slog.Any("err", err))
 	writeError(w, http.StatusInternalServerError, "internal", doing+" failed unexpectedly")
+}
+
+// writeRepoUpstreamError is writeUpstreamError for repo-scoped calls, where an
+// upstream rejection usually means the repo doesn't exist or the caller lacks
+// a key. The server deliberately answers 403 for both (existence is not
+// leaked), and the contract folds them into one repo_not_found; a 401 still
+// means this machine's credentials are bad.
+func writeRepoUpstreamError(w http.ResponseWriter, doing string, err error) {
+	var status *apiclient.StatusError
+	if errors.As(err, &status) &&
+		(status.StatusCode == http.StatusForbidden || status.StatusCode == http.StatusNotFound) {
+		writeError(w, http.StatusNotFound, "repo_not_found",
+			"repo not found, or you don't have access to it")
+		return
+	}
+	writeUpstreamError(w, doing, err)
 }
 
 // ── CORS ─────────────────────────────────────────────────────────────────────

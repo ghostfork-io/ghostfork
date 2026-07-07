@@ -72,10 +72,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	srv, err := serve.Listen(serve.Options{
-		Port:   servePort,
-		Token:  token,
-		Origin: origin,
-		Repos:  sess.client,
+		Port:     servePort,
+		Token:    token,
+		Origin:   origin,
+		Upstream: sess.client,
 	})
 	if err != nil {
 		return err
