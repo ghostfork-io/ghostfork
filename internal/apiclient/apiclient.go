@@ -53,6 +53,20 @@ func (e *UnreachableError) Error() string {
 
 func (e *UnreachableError) Unwrap() error { return e.Err }
 
+// StatusError reports that the server answered with a non-2xx HTTP status.
+// Its message keeps the historical "HTTP <code>: <body>" shape callers print
+// directly; holding the status as a field lets callers branch on it with
+// errors.As instead of parsing the string (e.g. gf serve mapping an upstream
+// 401/403 to its own error code).
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
+}
+
 // ValidateBaseURL checks that raw is a well-formed absolute http(s) URL,
 // without making any network call. Commands use it to reject a malformed
 // --server value up front with a clear message, rather than emitting a cryptic
@@ -129,6 +143,15 @@ func (c *Client) Register(username, publicKey string) error {
 		Username:  username,
 		PublicKey: publicKey,
 	}, nil)
+}
+
+// ListMyRepos returns the repos the authenticated caller holds a wrapped key
+// for — exactly the set it can decrypt. `gf serve` uses it to answer
+// GET /v1/repos for the dashboard's repo picker.
+func (c *Client) ListMyRepos() ([]types.RepoRef, error) {
+	var resp types.MyReposResponse
+	err := c.doJSON(http.MethodGet, "/api/v1/me/repos", nil, &resp)
+	return resp.Repos, err
 }
 
 // GetUser fetches a user's public profile.
@@ -254,7 +277,7 @@ func (c *Client) UploadPackfile(owner, repo, branch string, body io.Reader, size
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+		return 0, &StatusError{StatusCode: resp.StatusCode, Body: string(bytes.TrimSpace(raw))}
 	}
 	var up types.UploadPackfileResponse
 	if err := json.NewDecoder(resp.Body).Decode(&up); err != nil {
@@ -309,7 +332,7 @@ func (c *Client) DownloadPackfile(owner, repo string, seq int64) (io.ReadCloser,
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		resp.Body.Close()
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+		return nil, &StatusError{StatusCode: resp.StatusCode, Body: string(bytes.TrimSpace(raw))}
 	}
 	return resp.Body, nil
 }
@@ -365,7 +388,7 @@ func (c *Client) StageRotationPackfile(owner, repo string, generation int, body 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+		return &StatusError{StatusCode: resp.StatusCode, Body: string(bytes.TrimSpace(raw))}
 	}
 	return nil
 }
@@ -413,7 +436,7 @@ func (c *Client) doJSON(method, path string, body, out any) error {
 
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+		return &StatusError{StatusCode: resp.StatusCode, Body: string(bytes.TrimSpace(raw))}
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)

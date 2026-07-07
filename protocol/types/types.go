@@ -69,6 +69,20 @@ type CreateRepoRequest struct {
 	Owner string `json:"owner,omitempty"`
 }
 
+// RepoRef identifies one repo by owner (username or org slug) and name.
+type RepoRef struct {
+	Owner string `json:"owner"`
+	Name  string `json:"name"`
+}
+
+// MyReposResponse lists the repos the authenticated caller holds a wrapped
+// key for — i.e. exactly the set it can decrypt. Returned by
+// GET /api/v1/me/repos; `gf serve` uses it to build the dashboard's repo
+// picker (see docs/gf-serve-api.md).
+type MyReposResponse struct {
+	Repos []RepoRef `json:"repos"`
+}
+
 // ── Refs ──────────────────────────────────────────────────────────────────────
 
 type Ref struct {

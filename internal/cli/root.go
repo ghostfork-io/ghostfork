@@ -98,6 +98,7 @@ func init() {
 	rootCmd.AddCommand(switchUserCmd)
 	rootCmd.AddCommand(keyCmd)
 	rootCmd.AddCommand(verifyCmd)
+	rootCmd.AddCommand(serveCmd)
 
 	// Deprecated aliases from the repo→vault rename: hidden, warn on use, still
 	// work so existing scripts and muscle memory don't break.
