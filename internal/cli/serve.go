@@ -71,11 +71,18 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	cacheRoot, err := serve.DefaultCacheRoot(sess.cfg.ServerURL, sess.cfg.Username)
+	if err != nil {
+		return err
+	}
+
 	srv, err := serve.Listen(serve.Options{
 		Port:     servePort,
 		Token:    token,
 		Origin:   origin,
 		Upstream: sess.client,
+		Materializer: serve.NewMaterializer(
+			sess.client, sess.identity, sess.cfg.Username, cacheRoot),
 	})
 	if err != nil {
 		return err

@@ -59,6 +59,9 @@ type Options struct {
 	Origin string
 	// Upstream answers the data endpoints from the gf server.
 	Upstream Upstream
+	// Materializer maintains the local decrypted bare repos the object-level
+	// endpoints (tree, blob, history) read from.
+	Materializer *Materializer
 }
 
 // Origin derives the dashboard origin CORS must admit from the configured
@@ -126,6 +129,9 @@ func newHandler(opts Options) http.Handler {
 	v1.HandleFunc("/", handleV1NotFound)
 	v1.HandleFunc("GET /v1/repos", handleRepos(opts.Upstream))
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/refs", handleRefs(opts.Upstream))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/tree", handleTree(opts))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/blob", handleBlob(opts))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/commits", handleCommits(opts))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleRoot)

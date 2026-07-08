@@ -292,7 +292,7 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 		}
 		slog.Info(fmt.Sprintf("decrypting [XChaCha20-Poly1305] packfile seq=%d", seq))
 
-		plainN, cipherN, err := unpackEncrypted(body, repoKey, gitDir)
+		plainN, cipherN, err := UnpackEncrypted(body, repoKey, gitDir)
 		if err != nil {
 			body.Close()
 			return fmt.Errorf("unpacking packfile seq=%d: %w", seq, err)
@@ -325,9 +325,11 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 	return nil
 }
 
-// unpackEncrypted streams encrypted packfile bytes from src, decrypts them on
+// UnpackEncrypted streams encrypted packfile bytes from src, decrypts them on
 // the fly, and pipes the plaintext pack into `git index-pack --stdin`, which
-// writes it into the local object store as a pack (plus index).
+// writes it into the local object store as a pack (plus index). Exported
+// because `gf serve` materializes browse-only bare repos through the same
+// path a normal fetch uses.
 //
 // index-pack is used rather than unpack-objects: it keeps the objects packed
 // instead of exploding them into the loose-object directory, which is what
@@ -335,7 +337,7 @@ func (h *helper) handleFetch(w io.Writer, _ []string) error {
 //
 // Decryption runs in a goroutine writing to a pipe so neither the ciphertext
 // nor the plaintext is ever fully buffered in memory.
-func unpackEncrypted(src io.Reader, repoKey []byte, gitDir string) (plaintextBytes, ciphertextBytes int64, err error) {
+func UnpackEncrypted(src io.Reader, repoKey []byte, gitDir string) (plaintextBytes, ciphertextBytes int64, err error) {
 	cipher := &countingReader{r: src} // counts ciphertext bytes read off the wire
 	pr, pw := io.Pipe()
 	plain := &countingWriter{w: pw} // counts plaintext bytes produced
