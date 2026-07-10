@@ -12,7 +12,7 @@ import "fmt"
 
 // Version is the semver release version of gf. It is baked into the source
 // and bumped by hand on a release; it is not injected at build time.
-const Version = "0.1.0"
+const Version = "v1.0.0-genesis"
 
 // Commit is the git commit the binary was built from, in short form with a
 // "-dirty" suffix when the working tree had uncommitted changes at build time
