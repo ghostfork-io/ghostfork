@@ -173,11 +173,13 @@ func (c *Client) CreateRepo(name string, encKey []byte) error {
 
 // ── Refs ──────────────────────────────────────────────────────────────────────
 
-// GetRefs returns all branch→SHA refs for a repo.
-func (c *Client) GetRefs(owner, repo string) ([]types.Ref, error) {
+// GetRefs returns all branch→SHA refs for a repo, plus the repo's default
+// branch (bare name, "" when the server has none recorded — empty repo or one
+// predating default-branch support).
+func (c *Client) GetRefs(owner, repo string) (refs []types.Ref, defaultBranch string, err error) {
 	var resp types.RefsResponse
-	err := c.doJSON(http.MethodGet, repoPath(owner, repo)+"/refs", nil, &resp)
-	return resp.Refs, err
+	err = c.doJSON(http.MethodGet, repoPath(owner, repo)+"/refs", nil, &resp)
+	return resp.Refs, resp.DefaultBranch, err
 }
 
 // UpdateRef sets the tip SHA for a ref. branch is the full ref name

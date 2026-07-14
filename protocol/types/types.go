@@ -76,6 +76,11 @@ type Ref struct {
 
 type RefsResponse struct {
 	Refs []Ref `json:"refs"`
+	// DefaultBranch is the bare name of the repo's default branch — the one
+	// clones should check out. Following GitHub's rule, the server sets it to
+	// the first branch ever pushed. Empty for repos with no branches yet (or
+	// ones predating default-branch support); clients fall back to "main".
+	DefaultBranch string `json:"default_branch,omitempty"`
 }
 
 type UpdateRefRequest struct {

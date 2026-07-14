@@ -147,7 +147,7 @@ func TestGetRefsEmptyOnNewRepo(t *testing.T) {
 	ts := startFake(t)
 	c := withRepo(t, ts, "alice", "repo")
 
-	refs, err := c.GetRefs("alice", "repo")
+	refs, _, err := c.GetRefs("alice", "repo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestUpdateAndGetRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	refs, err := c.GetRefs("alice", "repo")
+	refs, _, err := c.GetRefs("alice", "repo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestUpdateRefReplacesPreviousValue(t *testing.T) {
 	c.UpdateRef("alice", "repo", "main", "aaa") //nolint:errcheck
 	c.UpdateRef("alice", "repo", "main", "bbb") //nolint:errcheck
 
-	refs, _ := c.GetRefs("alice", "repo")
+	refs, _, _ := c.GetRefs("alice", "repo")
 	if len(refs) != 1 || refs[0].CommitSHA != "bbb" {
 		t.Fatalf("expected SHA bbb, got %v", refs)
 	}
@@ -361,7 +361,7 @@ func TestForbiddenRepoReturnsError(t *testing.T) {
 	withRepo(t, ts, "alice", "secret")
 	bob := registered(t, ts, "bob")
 
-	_, err := bob.GetRefs("alice", "secret")
+	_, _, err := bob.GetRefs("alice", "secret")
 	if err == nil {
 		t.Fatal("expected error for unauthorized repo access, got nil")
 	}

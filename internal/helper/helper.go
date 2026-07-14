@@ -197,11 +197,14 @@ func (h *helper) remotef(format string, args ...any) {
 
 func (h *helper) handleList(w io.Writer) error {
 	slog.Debug("list refs", slog.String("owner", h.owner), slog.String("repo", h.repo))
-	refs, err := h.client.GetRefs(h.owner, h.repo)
+	refs, defaultBranch, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
 		return fmt.Errorf("listing refs: %w", err)
 	}
-	slog.Debug("refs fetched", slog.Int("count", len(refs)))
+	slog.Debug("refs fetched",
+		slog.Int("count", len(refs)),
+		slog.String("default_branch", defaultBranch),
+	)
 
 	// ref.Branch is the full ref name (refs/heads/<branch>, refs/tags/<tag>),
 	// so advertise it verbatim — anything else would misclassify tags as
@@ -210,12 +213,24 @@ func (h *helper) handleList(w io.Writer) error {
 		fmt.Fprintf(w, "%s %s\n", ref.CommitSHA, ref.Branch)
 	}
 
-	// Advertise HEAD → main when main exists so `git clone` checks out correctly.
+	// Advertise HEAD so `git clone` checks out the right branch: the server's
+	// recorded default (first branch ever pushed, GitHub's rule), verified to
+	// still exist; "main" as the fallback for repos that predate the recorded
+	// default. Repos matching neither advertise no HEAD — git then warns and
+	// checks out nothing, which is the honest outcome.
+	head := ""
 	for _, ref := range refs {
-		if ref.Branch == "refs/heads/main" {
-			fmt.Fprintf(w, "@refs/heads/main HEAD\n")
-			break
+		switch ref.Branch {
+		case "refs/heads/" + defaultBranch:
+			head = ref.Branch
+		case "refs/heads/main":
+			if head == "" || defaultBranch == "" {
+				head = "refs/heads/main"
+			}
 		}
+	}
+	if head != "" {
+		fmt.Fprintf(w, "@%s HEAD\n", head)
 	}
 
 	fmt.Fprintln(w) // blank line terminates the list
@@ -374,7 +389,7 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 	}
 	slog.Info("unwrapped repo key [age: X25519 + ChaCha20-Poly1305] ✓ — server cannot read it")
 
-	serverRefs, err := h.client.GetRefs(h.owner, h.repo)
+	serverRefs, _, err := h.client.GetRefs(h.owner, h.repo)
 	if err != nil {
 		return fmt.Errorf("getting server refs: %w", err)
 	}
