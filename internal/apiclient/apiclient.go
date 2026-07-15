@@ -190,7 +190,24 @@ func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 		types.UpdateRefRequest{CommitSHA: sha}, nil)
 }
 
+// SetRefs atomically commits a batch of ref updates — the commit phase of an
+// all-or-nothing push. The server applies every ref in one transaction or
+// none, so a failed push never leaves only some branches set.
+func (c *Client) SetRefs(owner, repo string, refs []types.Ref) error {
+	return c.doJSON(http.MethodPost, repoPath(owner, repo)+"/refs",
+		types.SetRefsRequest{Refs: refs}, nil)
+}
+
 // ── Packfiles ─────────────────────────────────────────────────────────────────
+
+// DeletePackfile removes a packfile (blob + row) by sequence number. Used to
+// roll back the packfiles staged during a push that then aborted, so a failed
+// push leaves no orphaned blobs against the owner's quota. Idempotent: an
+// already-absent packfile is not an error.
+func (c *Client) DeletePackfile(owner, repo string, seq int64) error {
+	return c.doJSON(http.MethodDelete,
+		repoPath(owner, repo)+"/packfiles/"+strconv.FormatInt(seq, 10), nil, nil)
+}
 
 // UploadPackfile streams an encrypted packfile to the server and returns the
 // assigned sequence number. body is the encrypted packfile contents, size is

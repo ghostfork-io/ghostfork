@@ -403,45 +403,103 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 			"refs fetched from server — %d existing ref(s), incremental push", len(serverRefs)))
 	}
 
-	failed := 0
+	// All-or-nothing push. A batch (notably `git push --all` with hundreds of
+	// branches) must land completely or not at all: if it aborts partway —
+	// e.g. the storage tier fills mid-upload — the repo must be left exactly
+	// as it was, never with only some branches. We get that with two phases:
+	//
+	//   1. Stage every ref's packfile (upload only — no refs set yet).
+	//   2. Commit all refs in ONE atomic server call.
+	//
+	// Refs are deferred to the very end on purpose: the server has no way to
+	// delete a ref, so the only way to guarantee "no new branches on failure"
+	// is to never set one until success is certain. If any stage fails we roll
+	// back the packfiles uploaded so far (freeing the quota) and report the
+	// whole push as failed, so git updates no remote-tracking refs either.
+	dstOf := func(line string) string {
+		spec := strings.TrimPrefix(line, "push ")
+		if i := strings.Index(spec, ":"); i >= 0 {
+			return spec[i+1:]
+		}
+		return spec
+	}
+	uploaded := []int64{}
+	abort := func(reason string) error {
+		if len(uploaded) > 0 {
+			slog.Warn("push aborted — rolling back staged packfiles",
+				slog.String("reason", reason), slog.Int("count", len(uploaded)))
+			for _, seq := range uploaded {
+				if err := h.client.DeletePackfile(h.owner, h.repo, seq); err != nil {
+					slog.Error("rollback: deleting staged packfile failed",
+						slog.Int64("seq", seq), slog.Any("err", err))
+				}
+			}
+		}
+		// Report every ref as failed so the push is atomic from git's view.
+		for _, line := range batch {
+			fmt.Fprintf(w, "error %s %s\n", dstOf(line), reason)
+		}
+		fmt.Fprintln(w)
+		return nil
+	}
+
+	type stagedRef struct{ dst, sha string }
+	staged := make([]stagedRef, 0, len(batch))
+
+	// Phase 1: stage every ref's packfile.
 	for _, line := range batch {
-		// "push refs/heads/main:refs/heads/main" or "+refs/heads/main:refs/heads/main" (force)
 		spec := strings.TrimPrefix(line, "push ")
 		colon := strings.Index(spec, ":")
 		if colon < 0 {
-			fmt.Fprintf(w, "error %s malformed push spec\n", spec)
-			continue
+			slog.Error("malformed push spec", slog.String("spec", spec))
+			return abort("malformed push spec")
 		}
-		src := spec[:colon]
-		dst := spec[colon+1:]
-
 		// Strip force-push marker; we always overwrite the remote ref tip.
-		src = strings.TrimPrefix(src, "+")
+		src := strings.TrimPrefix(spec[:colon], "+")
+		dst := spec[colon+1:]
 
 		// Branch deletion (empty src) is not supported in V1.
 		if src == "" {
-			fmt.Fprintf(w, "error %s branch deletion not supported\n", dst)
-			continue
+			return abort("branch deletion not supported")
 		}
 
-		if err := h.doPush(w, src, dst, repoKey, serverRefs, gitDir); err != nil {
-			// Never fail silently: git relays the protocol error to the user,
-			// but the log must record it too (helper.Run only sees fatal errors,
-			// not per-ref failures).
-			slog.Error("push failed", slog.String("ref", dst), slog.Any("err", err))
-			fmt.Fprintf(w, "error %s %v\n", dst, err)
-			failed++
+		newSHA, seq, err := h.stagePush(src, dst, repoKey, serverRefs, gitDir)
+		if err != nil {
+			slog.Error("push staging failed", slog.String("ref", dst), slog.Any("err", err))
+			return abort(err.Error())
 		}
+		uploaded = append(uploaded, seq)
+		staged = append(staged, stagedRef{dst: dst, sha: newSHA})
 	}
-	if failed == 0 {
-		slog.Info("push complete")
+
+	// Phase 2: commit all refs atomically. Until this succeeds the repo shows
+	// none of these branches.
+	refs := make([]types.Ref, len(staged))
+	for i, s := range staged {
+		refs[i] = types.Ref{Branch: s.dst, CommitSHA: s.sha}
 	}
+	slog.Info(fmt.Sprintf(
+		"all %d packfile(s) uploaded — committing ref(s) atomically (all-or-nothing)", len(staged)))
+	if err := h.client.SetRefs(h.owner, h.repo, refs); err != nil {
+		slog.Error("push commit failed", slog.Any("err", err))
+		return abort("commit failed: " + err.Error())
+	}
+
+	for _, s := range staged {
+		fmt.Fprintf(w, "ok %s\n", s.dst)
+	}
+	slog.Info("push complete", slog.Int("refs", len(staged)))
 
 	fmt.Fprintln(w) // blank line ends push response
 	return nil
 }
 
-func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs []types.Ref, gitDir string) error {
+// stagePush builds, encrypts, and uploads one ref's packfile WITHOUT
+// setting the ref. It is phase one of the all-or-nothing push in
+// handlePush: the ref is committed later, atomically with every other
+// ref, only once every packfile has uploaded. Returns the resolved tip
+// SHA and the server-assigned packfile seq (used to roll back on abort).
+func (h *helper) stagePush(src, dst string, repoKey []byte, serverRefs []types.Ref, gitDir string) (string, int64, error) {
 	gitEnv := append(os.Environ(), "GIT_DIR="+gitDir)
 
 	// Resolve the local ref to a commit SHA.
@@ -449,7 +507,7 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	revParseCmd.Env = gitEnv
 	shaOut, err := revParseCmd.Output()
 	if err != nil {
-		return fmt.Errorf("resolving %q: %w", src, err)
+		return "", 0, fmt.Errorf("resolving %q: %w", src, err)
 	}
 	newSHA := strings.TrimSpace(string(shaOut))
 	slog.Debug("resolved local ref",
@@ -474,11 +532,11 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	packCmd.Stderr = os.Stderr
 	packOut, err := packCmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("pack-objects stdout: %w", err)
+		return "", 0, fmt.Errorf("pack-objects stdout: %w", err)
 	}
 	slog.Debug("git pack-objects: building packfile locally")
 	if err := packCmd.Start(); err != nil {
-		return fmt.Errorf("starting pack-objects: %w", err)
+		return "", 0, fmt.Errorf("starting pack-objects: %w", err)
 	}
 
 	// Stage the encrypted pack in a temp file while hashing it, so we can set
@@ -486,7 +544,7 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	// pack-objects streams its output straight through the encrypting writer.
 	tmp, err := os.CreateTemp("", "gf-push-*.pack.enc")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return "", 0, fmt.Errorf("creating temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
@@ -500,24 +558,24 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	if err := crypto.EncryptPackfile(io.MultiWriter(tmp, hasher), plain, repoKey); err != nil {
 		tmp.Close()
 		_ = packCmd.Wait()
-		return fmt.Errorf("encrypting packfile: %w", err)
+		return "", 0, fmt.Errorf("encrypting packfile: %w", err)
 	}
 	if err := packCmd.Wait(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("pack-objects: %w", err)
+		return "", 0, fmt.Errorf("pack-objects: %w", err)
 	}
 	size, err := tmp.Seek(0, io.SeekCurrent)
 	if err != nil {
 		tmp.Close()
-		return err
+		return "", 0, err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return "", 0, err
 	}
 	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 		tmp.Close()
-		return err
+		return "", 0, err
 	}
 	bodyHash := hex.EncodeToString(hasher.Sum(nil))
 	slog.Info(fmt.Sprintf(
@@ -537,11 +595,11 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 		n, err := io.ReadFull(tmp, preview)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			tmp.Close()
-			return fmt.Errorf("reading packfile preview: %w", err)
+			return "", 0, fmt.Errorf("reading packfile preview: %w", err)
 		}
 		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
 			tmp.Close()
-			return err
+			return "", 0, err
 		}
 		// Hex dump in the exact xxd format the admin panel renders (toXxd) so a
 		// demo viewer can compare client and server byte for byte. slog's text
@@ -568,21 +626,11 @@ func (h *helper) doPush(w io.Writer, src, dst string, repoKey []byte, serverRefs
 	seq, err := h.client.UploadPackfile(h.owner, h.repo, refName, tmp, size, bodyHash)
 	tmp.Close()
 	if err != nil {
-		return fmt.Errorf("uploading packfile: %w", err)
+		return "", 0, fmt.Errorf("uploading packfile: %w", err)
 	}
 	slog.Debug("upload complete — server assigned seq", slog.Int64("seq", seq))
 
-	// Update the remote ref tip.
-	if err := h.client.UpdateRef(h.owner, h.repo, refName, newSHA); err != nil {
-		return fmt.Errorf("updating ref: %w", err)
-	}
-	slog.Debug("ref updated",
-		slog.String("ref", refName),
-		slog.String("sha", newSHA),
-	)
-
-	fmt.Fprintf(w, "ok %s\n", dst)
-	return nil
+	return newSHA, seq, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
