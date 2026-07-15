@@ -28,8 +28,8 @@ access to teammates afterwards with 'gf add-user'.
 After init-repo succeeds, add the repo as a git remote and push as
 normal:
 
-    git remote add origin gf://<your-username>/<name>
-    git push -u origin main`,
+    git remote add <remote-name> gf://<your-username>/<name>
+    git push -u <remote-name> <branch-name>`,
 	Example: `  # Create a repo called 'my-project' owned by you
   gf init-repo my-project`,
 	Args: cobra.ExactArgs(1),
@@ -76,7 +76,7 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "\nRepo created: %s/%s\n\n", sess.cfg.Username, repoName)
 	fmt.Fprintf(cmd.OutOrStdout(), "Add as a git remote with:\n\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "    git remote add origin gf://%s/%s\n", sess.cfg.Username, repoName)
-	fmt.Fprintf(cmd.OutOrStdout(), "    git push -u origin main\n\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "    git remote add <remote-name> gf://%s/%s\n", sess.cfg.Username, repoName)
+	fmt.Fprintf(cmd.OutOrStdout(), "    git push -u <remote-name> <branch-name>\n\n")
 	return nil
 }
