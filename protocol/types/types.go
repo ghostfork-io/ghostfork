@@ -87,17 +87,30 @@ type UpdateRefRequest struct {
 	CommitSHA string `json:"commit_sha"`
 }
 
-// SetRefsRequest atomically commits a push — its final phase. In one server
-// transaction it promotes the packfiles staged by this push (PackfileSeqs,
-// uploaded quarantined) to committed AND applies every ref update, or does
-// neither. So a failed/aborted push never leaves a repo with only some of its
-// branches, nor committed content whose ref never got set (see the client
-// helper's two-phase push).
+// SetRefsRequest commits a push — its final phase, following git-receive-pack.
+// The server promotes the packfiles staged by this push (PackfileSeqs, uploaded
+// quarantined) to committed, then updates each ref INDEPENDENTLY: a ref that
+// can't be updated does not affect the others (normal git push semantics, not
+// all-or-nothing). git has already applied the fast-forward/force rules
+// client-side, so the refs here are ones git approved.
 type SetRefsRequest struct {
 	Refs []Ref `json:"refs"`
 	// PackfileSeqs are the server-assigned sequence numbers of the packfiles
-	// this push uploaded, to be promoted out of quarantine alongside the refs.
+	// this push uploaded, to be promoted out of quarantine before the refs.
 	PackfileSeqs []int64 `json:"packfile_seqs"`
+}
+
+// SetRefsResponse reports the outcome of SetRefsRequest. Failed lists the refs
+// that could not be updated (empty when every ref landed); the rest succeeded.
+type SetRefsResponse struct {
+	Failed []RefFailure `json:"failed,omitempty"`
+}
+
+// RefFailure is one ref that could not be updated, with a client-safe reason
+// the helper relays to git (and the user).
+type RefFailure struct {
+	Branch string `json:"branch"`
+	Reason string `json:"reason"`
 }
 
 // ── Packfiles ─────────────────────────────────────────────────────────────────

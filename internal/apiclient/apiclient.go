@@ -198,13 +198,16 @@ func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 		types.UpdateRefRequest{CommitSHA: sha}, nil)
 }
 
-// SetRefs atomically commits a push — the final phase of an all-or-nothing
-// push. In one server transaction it promotes the staged packfiles (seqs) out
-// of quarantine and applies every ref, or does neither, so a failed push never
-// leaves only some branches set nor committed content with no ref.
-func (c *Client) SetRefs(owner, repo string, refs []types.Ref, seqs []int64) error {
-	return c.doJSON(http.MethodPost, repoPath(owner, repo)+"/refs",
-		types.SetRefsRequest{Refs: refs, PackfileSeqs: seqs}, nil)
+// SetRefs commits a push (git-receive-pack style): the server promotes the
+// staged packfiles (seqs) out of quarantine, then updates each ref
+// independently. It returns the refs that could not be updated (empty when all
+// landed); the returned error is for transport/server failures where nothing
+// was committed. A partial failure is NOT an error — the good refs still land.
+func (c *Client) SetRefs(owner, repo string, refs []types.Ref, seqs []int64) ([]types.RefFailure, error) {
+	var resp types.SetRefsResponse
+	err := c.doJSON(http.MethodPost, repoPath(owner, repo)+"/refs",
+		types.SetRefsRequest{Refs: refs, PackfileSeqs: seqs}, &resp)
+	return resp.Failed, err
 }
 
 // ── Packfiles ─────────────────────────────────────────────────────────────────

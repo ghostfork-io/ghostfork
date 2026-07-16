@@ -403,21 +403,16 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 			"refs fetched from server — %d existing ref(s), incremental push", len(serverRefs)))
 	}
 
-	// All-or-nothing push, modelled on git-receive-pack. A batch (notably
-	// `git push --all` with hundreds of branches) must land completely or not
-	// at all, and must never store the same object twice. So the WHOLE batch
-	// becomes ONE deduplicated packfile — every pushed tip as a positive,
-	// everything the server already has as a negative — exactly the thin pack
-	// real git sends for a push. Two phases:
-	//
-	//   1. Stage the single pack (build, encrypt, upload — no refs set yet).
-	//   2. Commit all refs in ONE atomic server call.
-	//
-	// Refs are deferred to the very end on purpose: the server has no way to
-	// delete a ref, so the only way to guarantee "no new branches on failure"
-	// is to never set one until success is certain. On any abort we roll back
-	// the staged pack (freeing the quota) and report the whole push as failed,
-	// so git updates no remote-tracking refs either.
+	// Normal git push (git-receive-pack semantics). The whole batch is packed
+	// into ONE deduplicated packfile — every pushed tip as a positive,
+	// everything the server already has as a negative, the thin pack real git
+	// sends — uploaded once to quarantine. Then each ref is updated
+	// INDEPENDENTLY: a ref that can't be set does not affect the others, and the
+	// refs that succeed stay. git has already applied the fast-forward/force
+	// rules (we advertise the remote SHAs in `list`), so the specs reaching here
+	// are the ones git approved. Objects are committed before refs, so a ref
+	// never points at unfetchable content; a push that never reaches the commit
+	// step leaves only quarantined objects, reclaimed by the sweeper.
 	dstOf := func(line string) string {
 		spec := strings.TrimPrefix(line, "push ")
 		if i := strings.Index(spec, ":"); i >= 0 {
@@ -425,27 +420,10 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		}
 		return spec
 	}
-	uploadedSeq := int64(-1)
-	abort := func(reason string) error {
-		if uploadedSeq >= 0 {
-			slog.Warn("push aborted — rolling back staged packfile",
-				slog.String("reason", reason), slog.Int64("seq", uploadedSeq))
-			if err := h.client.DeletePackfile(h.owner, h.repo, uploadedSeq); err != nil {
-				slog.Error("rollback: deleting staged packfile failed",
-					slog.Int64("seq", uploadedSeq), slog.Any("err", err))
-			}
-		}
-		// Report every ref as failed so the push is atomic from git's view.
-		for _, line := range batch {
-			fmt.Fprintf(w, "error %s %s\n", dstOf(line), reason)
-		}
-		fmt.Fprintln(w)
-		return nil
-	}
 
-	// Parse every spec and resolve its source to a tip SHA up front, before any
-	// packing — a malformed spec or unsupported deletion aborts with nothing
-	// uploaded.
+	// Parse every spec and resolve its source to a tip SHA. A malformed spec or
+	// unsupported deletion fails only that ref (reported now); the rest of the
+	// push proceeds.
 	type stagedRef struct{ dst, sha string }
 	staged := make([]stagedRef, 0, len(batch))
 	gitEnv := append(os.Environ(), "GIT_DIR="+gitDir)
@@ -454,55 +432,88 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		colon := strings.Index(spec, ":")
 		if colon < 0 {
 			slog.Error("malformed push spec", slog.String("spec", spec))
-			return abort("malformed push spec")
+			fmt.Fprintf(w, "error %s malformed push spec\n", dstOf(line))
+			continue
 		}
-		// Strip force-push marker; we always overwrite the remote ref tip.
+		// Strip force-push marker; git only sends a forced/fast-forward update.
 		src := strings.TrimPrefix(spec[:colon], "+")
 		dst := spec[colon+1:]
 
 		// Branch deletion (empty src) is not supported in V1.
 		if src == "" {
-			return abort("branch deletion not supported")
+			fmt.Fprintf(w, "error %s branch deletion not supported\n", dst)
+			continue
 		}
 
 		sha, err := resolveRef(gitEnv, src)
 		if err != nil {
 			slog.Error("resolving push ref failed", slog.String("ref", dst), slog.Any("err", err))
-			return abort(err.Error())
+			fmt.Fprintf(w, "error %s %v\n", dst, err)
+			continue
 		}
 		staged = append(staged, stagedRef{dst: dst, sha: sha})
 	}
 
-	// Phase 1: build, encrypt, and upload the single pack covering every tip.
+	// Nothing resolvable → done (any parse errors were already reported).
+	if len(staged) == 0 {
+		fmt.Fprintln(w)
+		return nil
+	}
+
+	// Build, encrypt, and upload the single pack covering every staged tip.
 	tips := make([]string, len(staged))
 	for i, s := range staged {
 		tips[i] = s.sha
 	}
 	seq, err := h.stagePack(tips, repoKey, serverRefs, gitDir)
 	if err != nil {
+		// The transfer failed, so no objects landed and no ref can be set —
+		// report every staged ref as failed. Nothing was uploaded to clean up.
 		slog.Error("push staging failed", slog.Any("err", err))
-		return abort(err.Error())
+		for _, s := range staged {
+			fmt.Fprintf(w, "error %s %v\n", s.dst, err)
+		}
+		fmt.Fprintln(w)
+		return nil
 	}
-	uploadedSeq = seq
 
-	// Phase 2: commit all refs atomically, promoting the staged pack out of
-	// quarantine in the same server transaction. Until this succeeds the repo
-	// shows none of these branches.
+	// Commit: promote the pack out of quarantine, then update each ref
+	// independently. SetRefs returns the refs that failed; the good ones landed.
 	refs := make([]types.Ref, len(staged))
 	for i, s := range staged {
 		refs[i] = types.Ref{Branch: s.dst, CommitSHA: s.sha}
 	}
-	slog.Info(fmt.Sprintf(
-		"packfile uploaded — committing ref(s) atomically (all-or-nothing) [%d ref(s)]", len(staged)))
-	if err := h.client.SetRefs(h.owner, h.repo, refs, []int64{seq}); err != nil {
+	slog.Info("packfile uploaded — committing ref(s)", slog.Int("count", len(staged)))
+	failed, err := h.client.SetRefs(h.owner, h.repo, refs, []int64{seq})
+	if err != nil {
+		// The commit call failed at the transport level. We CANNOT tell whether
+		// the server never received it or committed it and only the response was
+		// lost, so we must NOT delete the pack: if it was in fact committed, the
+		// ref now points at it and deleting would strand that ref. We leave the
+		// server state authoritative — an uncommitted pack is reclaimed by the
+		// sweeper, a committed one is correct and a retry is a harmless no-op —
+		// and report every ref failed so git updates no remote-tracking ref.
 		slog.Error("push commit failed", slog.Any("err", err))
-		return abort("commit failed: " + err.Error())
+		for _, s := range staged {
+			fmt.Fprintf(w, "error %s %v\n", s.dst, err)
+		}
+		fmt.Fprintln(w)
+		return nil
 	}
 
-	for _, s := range staged {
-		fmt.Fprintf(w, "ok %s\n", s.dst)
+	failedReason := make(map[string]string, len(failed))
+	for _, f := range failed {
+		failedReason[f.Branch] = f.Reason
 	}
-	slog.Info("push complete", slog.Int("refs", len(staged)))
+	for _, s := range staged {
+		if reason, bad := failedReason[s.dst]; bad {
+			fmt.Fprintf(w, "error %s %s\n", s.dst, reason)
+		} else {
+			fmt.Fprintf(w, "ok %s\n", s.dst)
+		}
+	}
+	slog.Info("push complete",
+		slog.Int("ok", len(staged)-len(failed)), slog.Int("failed", len(failed)))
 
 	fmt.Fprintln(w) // blank line ends push response
 	return nil
