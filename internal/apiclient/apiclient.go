@@ -171,6 +171,14 @@ func (c *Client) CreateRepo(name string, encKey []byte) error {
 	}, nil)
 }
 
+// DeleteRepo permanently deletes a repo and all of its server-side state
+// (packfiles, keys, refs). Irreversible. The server authorizes this: only the
+// repo's owner (or, for an org repo, an org admin) may delete it — a plain
+// member is rejected with 403.
+func (c *Client) DeleteRepo(owner, repo string) error {
+	return c.doJSON(http.MethodDelete, repoPath(owner, repo), nil, nil)
+}
+
 // ── Refs ──────────────────────────────────────────────────────────────────────
 
 // GetRefs returns all branch→SHA refs for a repo, plus the repo's default
