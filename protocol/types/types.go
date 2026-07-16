@@ -87,12 +87,17 @@ type UpdateRefRequest struct {
 	CommitSHA string `json:"commit_sha"`
 }
 
-// SetRefsRequest atomically commits a batch of ref updates — the final phase
-// of an all-or-nothing push. The server applies every entry in one
-// transaction or none, so a failed/aborted push never leaves a repo with
-// only some of its branches (see the client helper's two-phase push).
+// SetRefsRequest atomically commits a push — its final phase. In one server
+// transaction it promotes the packfiles staged by this push (PackfileSeqs,
+// uploaded quarantined) to committed AND applies every ref update, or does
+// neither. So a failed/aborted push never leaves a repo with only some of its
+// branches, nor committed content whose ref never got set (see the client
+// helper's two-phase push).
 type SetRefsRequest struct {
 	Refs []Ref `json:"refs"`
+	// PackfileSeqs are the server-assigned sequence numbers of the packfiles
+	// this push uploaded, to be promoted out of quarantine alongside the refs.
+	PackfileSeqs []int64 `json:"packfile_seqs"`
 }
 
 // ── Packfiles ─────────────────────────────────────────────────────────────────

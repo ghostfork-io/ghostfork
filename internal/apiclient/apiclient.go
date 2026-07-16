@@ -190,12 +190,13 @@ func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 		types.UpdateRefRequest{CommitSHA: sha}, nil)
 }
 
-// SetRefs atomically commits a batch of ref updates — the commit phase of an
-// all-or-nothing push. The server applies every ref in one transaction or
-// none, so a failed push never leaves only some branches set.
-func (c *Client) SetRefs(owner, repo string, refs []types.Ref) error {
+// SetRefs atomically commits a push — the final phase of an all-or-nothing
+// push. In one server transaction it promotes the staged packfiles (seqs) out
+// of quarantine and applies every ref, or does neither, so a failed push never
+// leaves only some branches set nor committed content with no ref.
+func (c *Client) SetRefs(owner, repo string, refs []types.Ref, seqs []int64) error {
 	return c.doJSON(http.MethodPost, repoPath(owner, repo)+"/refs",
-		types.SetRefsRequest{Refs: refs}, nil)
+		types.SetRefsRequest{Refs: refs, PackfileSeqs: seqs}, nil)
 }
 
 // ── Packfiles ─────────────────────────────────────────────────────────────────
