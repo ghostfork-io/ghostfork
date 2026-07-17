@@ -26,11 +26,14 @@ func main() {
 		// non-zero without crowding it with an "Error:" line.
 		if !errors.Is(err, cli.ErrSilent) {
 			// Pad the error like the commands pad their success output: a leading
-			// blank line and a trailing blank line so it doesn't crowd the command
-			// or the next prompt. The "Error:" prefix labels what follows, which
-			// may be a multi-line message.
-			fmt.Fprintf(os.Stderr, "\nError: %v\n\n", err)
+			// blank line so it doesn't crowd the command. The "Error:" prefix
+			// labels what follows, which may be a multi-line message.
+			fmt.Fprintf(os.Stderr, "\nError: %v\n", err)
 		}
+		// Point every failure at the docs. Printed as a bare URL so the terminal
+		// makes it clickable and it's easy to copy. Trailing blank line keeps it
+		// off the next shell prompt.
+		fmt.Fprintf(os.Stderr, "\nDocs: %s\n\n", cli.DocsURL)
 		os.Exit(1)
 	}
 }

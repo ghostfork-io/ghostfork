@@ -13,6 +13,13 @@ import (
 
 var verbose bool
 
+// DocsURL is the Ghostfork documentation site. It is shown at the foot of every
+// command's help output and whenever a command errors, so users always have a
+// pointer to the docs one click away. Printed as a bare URL so terminals
+// linkify it and it stays copy-pasteable everywhere (macOS Terminal, iTerm2,
+// GNOME Terminal, Konsole, Windows Terminal, VS Code, …).
+const DocsURL = "https://ghostfork.io/docs/"
+
 var rootCmd = &cobra.Command{
 	Use:   "gf",
 	Short: "Ghostfork — zero-trust encrypted Git remote",
@@ -37,9 +44,7 @@ Typical workflow:
 
 To add a teammate to a repo you already own:
 
-    gf add-user my-project bob
-
-See https://github.com/ghostfork/gf for the full documentation.`,
+    gf add-user my-project bob`,
 	Example: `  # First-time setup on a new machine
   gf login --server https://api.example.com --username alice
 
@@ -71,6 +76,13 @@ See https://github.com/ghostfork/gf for the full documentation.`,
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "log debug-level details to stderr")
+
+	// Append a docs link to the foot of every command's help output. Set on the
+	// root only: Cobra falls back to the parent's template for any command that
+	// has none of its own, so this one line covers `gf --help` and every
+	// `gf <command> --help`. rootCmd.HelpTemplate() returns Cobra's default here
+	// (the root has no parent and no template set yet), which we extend.
+	rootCmd.SetHelpTemplate(rootCmd.HelpTemplate() + "\nDocs: " + DocsURL + "\n")
 
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
