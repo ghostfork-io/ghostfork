@@ -15,8 +15,10 @@ func withCommit(t *testing.T, c string) {
 }
 
 func TestVersionIsSemver(t *testing.T) {
-	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(Version) {
-		t.Errorf("Version = %q, want a bare semver like 1.2.3", Version)
+	// Go-style semver: a "v" prefix, a MAJOR.MINOR.PATCH core, and an optional
+	// pre-release suffix (e.g. "v1.0.0-genesis").
+	if !regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$`).MatchString(Version) {
+		t.Errorf("Version = %q, want a semver like v1.2.3 or v1.2.3-genesis", Version)
 	}
 }
 
@@ -30,28 +32,28 @@ func TestCommitDefaultsToUnknown(t *testing.T) {
 
 func TestStringFormat(t *testing.T) {
 	withCommit(t, "9f3a2bc")
-	if got, want := String(), "0.1.0 (commit 9f3a2bc)"; got != want {
+	if got, want := String(), Version+" (commit 9f3a2bc)"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
 }
 
 func TestStringFormatDirty(t *testing.T) {
 	withCommit(t, "9f3a2bc-dirty")
-	if got, want := String(), "0.1.0 (commit 9f3a2bc-dirty)"; got != want {
+	if got, want := String(), Version+" (commit 9f3a2bc-dirty)"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
 }
 
 func TestUserAgentFormat(t *testing.T) {
 	withCommit(t, "9f3a2bc")
-	if got, want := UserAgent(), "gf/0.1.0 (commit 9f3a2bc)"; got != want {
+	if got, want := UserAgent(), "gf/"+Version+" (commit 9f3a2bc)"; got != want {
 		t.Errorf("UserAgent() = %q, want %q", got, want)
 	}
 }
 
 func TestUserAgentUnknown(t *testing.T) {
 	withCommit(t, "unknown")
-	if got, want := UserAgent(), "gf/0.1.0 (commit unknown)"; got != want {
+	if got, want := UserAgent(), "gf/"+Version+" (commit unknown)"; got != want {
 		t.Errorf("UserAgent() = %q, want %q", got, want)
 	}
 }

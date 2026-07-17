@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghostfork/gf/internal/version"
 )
 
 // TestCommitInjectedAtBuildTime proves the full build-time path end to end:
@@ -30,7 +32,7 @@ func TestCommitInjectedAtBuildTime(t *testing.T) {
 		t.Fatalf("gf --version: %v\n%s", err, out)
 	}
 	got := strings.TrimSpace(string(out))
-	want := "gf version 0.1.0 (commit abc1234-dirty)"
+	want := "gf version " + version.Version + " (commit abc1234-dirty)"
 	if got != want {
 		t.Errorf("gf --version = %q, want %q", got, want)
 	}
