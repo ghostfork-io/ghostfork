@@ -8,26 +8,26 @@ import (
 )
 
 var removeUserCmd = &cobra.Command{
-	Use:   "remove-user <repo> <username>",
-	Short: "Revoke a user's access to a repo",
-	Long: `Revoke a user's access to a repo by deleting their wrapped copy of the
-repo key from the server.
+	Use:   "remove-user <vault> <username>",
+	Short: "Revoke a user's access to a vault",
+	Long: `Revoke a user's access to a vault by deleting their wrapped copy of the
+vault's key from the server.
 
-After remove-user, the target's next API request to this repo returns
+After remove-user, the target's next API request to this vault returns
 403 Forbidden — they cannot push, pull, or read refs.
 
-V1 limitation: the removed user may already hold the plaintext repo
-key in memory or local cache from a previous session, in which case
-they can still decrypt history they have already downloaded. Key
-rotation to invalidate past access is planned for V2.
+V1 limitation: the removed user may already hold the plaintext key in
+memory or local cache from a previous session, in which case they can
+still decrypt history they have already downloaded. Key rotation to
+invalidate past access is planned for V2.
 
-<repo> can be either 'repo-name' (your own repo) or 'owner/repo-name'
-(someone else's repo that you administer).`,
-	Example: `  # Remove bob from your own repo
-  gf remove-user my-project bob
+<vault> can be either 'vault-name' (your own vault) or 'owner/vault-name'
+(someone else's vault that you administer).`,
+	Example: `  # Remove bob from your own vault
+  gf remove-user myvault bob
 
-  # Remove charlie from alice's repo (you must be a member)
-  gf remove-user alice/my-project charlie`,
+  # Remove charlie from alice's vault (you must be a member)
+  gf remove-user alice/myvault charlie`,
 	Args: cobra.ExactArgs(2),
 	RunE: runRemoveUser,
 }

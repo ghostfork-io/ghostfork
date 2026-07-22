@@ -32,12 +32,12 @@ func TestConfirmDeleteRepo(t *testing.T) {
 			cmd.SetOut(&bytes.Buffer{})
 			cmd.SetErr(&bytes.Buffer{})
 
-			got, err := confirmDeleteRepo(cmd, "alice", "my-project")
+			got, err := confirmDeleteVault(cmd, "alice", "my-project")
 			if err != nil {
-				t.Fatalf("confirmDeleteRepo: %v", err)
+				t.Fatalf("confirmDeleteVault: %v", err)
 			}
 			if got != tc.want {
-				t.Fatalf("confirmDeleteRepo(%q) = %v, want %v", tc.input, got, tc.want)
+				t.Fatalf("confirmDeleteVault(%q) = %v, want %v", tc.input, got, tc.want)
 			}
 		})
 	}

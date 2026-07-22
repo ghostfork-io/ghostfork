@@ -35,31 +35,33 @@ All encryption and decryption happens locally on your machine. After
 exactly as you would with any other remote — gf intercepts push and
 pull traffic transparently via the gf:// URL scheme.
 
-Typical workflow:
+A vault is the encrypted container on the server that a git repo gets
+pushed into; it is not a git repo itself, and its name is an arbitrary
+label. Typical workflow:
 
     gf login --server https://api.example.com --username alice
-    gf init-repo my-project
-    git remote add origin gf://alice/my-project
+    gf init-vault myvault
+    git remote add origin gf://alice/myvault
     git push -u origin main
 
-To add a teammate to a repo you already own:
+To add a teammate to a vault you already own:
 
-    gf add-user my-project bob`,
+    gf add-user myvault bob`,
 	Example: `  # First-time setup on a new machine
   gf login --server https://api.example.com --username alice
 
-  # Create an encrypted repo on the server
-  gf init-repo my-project
+  # Create an encrypted vault on the server
+  gf init-vault myvault
 
-  # Use as a normal git remote
-  git remote add origin gf://alice/my-project
+  # Use as a normal git remote of an existing repo
+  git remote add origin gf://alice/myvault
   git push -u origin main
 
   # Grant a teammate access
-  gf add-user my-project bob
+  gf add-user myvault bob
 
   # Revoke access
-  gf remove-user my-project bob`,
+  gf remove-user myvault bob`,
 	SilenceUsage:      true,
 	SilenceErrors:     true,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -87,13 +89,18 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
 	rootCmd.AddCommand(statusCmd)
-	rootCmd.AddCommand(initRepoCmd)
-	rootCmd.AddCommand(deleteRepoCmd)
+	rootCmd.AddCommand(initVaultCmd)
+	rootCmd.AddCommand(deleteVaultCmd)
 	rootCmd.AddCommand(addUserCmd)
 	rootCmd.AddCommand(removeUserCmd)
 	rootCmd.AddCommand(switchUserCmd)
 	rootCmd.AddCommand(keyCmd)
 	rootCmd.AddCommand(verifyCmd)
+
+	// Deprecated aliases from the repo→vault rename: hidden, warn on use, still
+	// work so existing scripts and muscle memory don't break.
+	rootCmd.AddCommand(initRepoCmd)
+	rootCmd.AddCommand(deleteRepoCmd)
 }
 
 // Execute runs the root command. It is called from cmd/gf/main.go.

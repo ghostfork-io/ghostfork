@@ -35,9 +35,9 @@ var verifyInput string
 const decryptedPackName = "decrypted.pack"
 
 var verifyCmd = &cobra.Command{
-	Use:   "verify <owner>/<repo>",
+	Use:   "verify <owner>/<vault>",
 	Short: "Prove server-stored data was encrypted client-side",
-	Long: `Fetch the latest encrypted packfile for a repo and prove, end to end, that
+	Long: `Fetch the latest encrypted packfile for a vault and prove, end to end, that
 the bytes the server holds are ciphertext only you can open:
 
   1. download the packfile and show its SHA-256 matches the server's record
@@ -104,7 +104,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("listing packfiles for %s/%s: %w", owner, repo, err)
 		}
 		if len(seqs) == 0 {
-			return fmt.Errorf("repo %s/%s has no packfiles to verify — push something first", owner, repo)
+			return fmt.Errorf("vault %s/%s has no packfiles to verify — push something first", owner, repo)
 		}
 		latest := seqs[len(seqs)-1]
 
@@ -219,7 +219,7 @@ func unwrapRepoKey(sess *session, owner, repo string) ([]byte, error) {
 	}
 	repoKey, err := crypto.DecryptRepoKey(encKey, sess.identity)
 	if err != nil {
-		return nil, fmt.Errorf("unwrapping repo key (is this your repo?): %w", err)
+		return nil, fmt.Errorf("unwrapping repo key (is this your vault?): %w", err)
 	}
 	return repoKey, nil
 }

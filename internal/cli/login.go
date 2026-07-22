@@ -274,8 +274,12 @@ func bootstrapLogin(cmd *cobra.Command, serverURL, username, password, identityP
 	fmt.Fprintf(cmd.OutOrStdout(), "A new keypair was generated and its public key registered.\n")
 	fmt.Fprintf(cmd.OutOrStdout(), "Identity written to %s\n", identityPath)
 	fmt.Fprintf(cmd.OutOrStdout(), "Back this file up — V1 has no key recovery if it is lost.\n\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "Next step:\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "    gf init-repo <name>\n\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "You're ready to create your first GF vault.\n\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "    gf init-vault <name>\n\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "A vault is the encrypted container on Ghostfork that you push a git repo\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "into. <name> is the label you want to give it (e.g. \"myproject\") — it's\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "arbitrary and does NOT need to match your git repo's name. This registers\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "a new vault on the server and sets up local encryption for it.\n\n")
 	return nil
 }
 

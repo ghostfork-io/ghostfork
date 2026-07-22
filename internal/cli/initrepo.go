@@ -12,38 +12,55 @@ import (
 	"github.com/ghostfork/gf/internal/logging"
 )
 
-var initRepoCmd = &cobra.Command{
-	Use:   "init-repo <name>",
-	Short: "Create a new encrypted repo on the server",
-	Long: `Create a new encrypted repo on the server you are logged into.
+var initVaultCmd = &cobra.Command{
+	Use:   "init-vault <name>",
+	Short: "Create a new encrypted vault on the server",
+	Long: `Create a new encrypted vault on the server you are logged into.
+
+A vault is the encrypted container on Ghostfork that a git repo gets
+pushed into — it is NOT a git repo itself. Its <name> is an arbitrary
+label on Ghostfork and does not need to match the name of any git repo
+you later push into it.
 
 A fresh 256-bit symmetric key is generated locally, wrapped with your
 public key, and uploaded to the server. The server never sees the
-plaintext key. You become the repo's first (and only initial) member.
+plaintext key. You become the vault's first (and only initial) member.
 
-The repo's owner is always you — the wire format has no separate owner
-field, so it is impossible to create a repo "for someone else." Grant
+The vault's owner is always you — the wire format has no separate owner
+field, so it is impossible to create a vault "for someone else." Grant
 access to teammates afterwards with 'gf add-user'.
 
-After init-repo succeeds, add the repo as a git remote and push as
-normal:
+After init-vault succeeds, add the vault as a git remote of an existing
+git repo and push as normal:
 
     git remote add <remote-name> gf://<your-username>/<name>
     git push -u <remote-name> <branch-name>`,
-	Example: `  # Create a repo called 'my-project' owned by you
-  gf init-repo my-project`,
+	Example: `  # Create a vault called 'myvault' owned by you
+  gf init-vault myvault`,
 	Args: cobra.ExactArgs(1),
-	RunE: runInitRepo,
+	RunE: runInitVault,
 }
 
-func runInitRepo(cmd *cobra.Command, args []string) error {
+// initRepoCmd is the deprecated alias of init-vault. It is hidden from help and
+// prints Cobra's deprecation notice, but still works so existing scripts and
+// muscle memory (`gf init-repo`) don't break after the repo→vault rename.
+var initRepoCmd = &cobra.Command{
+	Use:        "init-repo <name>",
+	Short:      "Deprecated alias of init-vault",
+	Hidden:     true,
+	Deprecated: `use "gf init-vault" instead.`,
+	Args:       cobra.ExactArgs(1),
+	RunE:       runInitVault,
+}
+
+func runInitVault(cmd *cobra.Command, args []string) error {
 	repoName := args[0]
 
 	sess, err := loadSession()
 	if err != nil {
 		return err
 	}
-	slog.Debug("init-repo start", slog.String("name", repoName), slog.String("owner", sess.cfg.Username))
+	slog.Debug("init-vault start", slog.String("name", repoName), slog.String("owner", sess.cfg.Username))
 
 	repoKey, err := crypto.GenerateRepoKey()
 	if err != nil {
@@ -70,13 +87,20 @@ func runInitRepo(cmd *cobra.Command, args []string) error {
 	// The repo owner is always the caller; the server derives it from the
 	// authenticated session, so we just pass the name.
 	if err := sess.client.CreateRepo(repoName, encKey); err != nil {
-		return fmt.Errorf("creating repo: %w", err)
+		return fmt.Errorf("creating vault: %w", err)
 	}
 	slog.Debug("repo created on server", slog.String("name", repoName))
 
-	fmt.Fprintf(cmd.OutOrStdout(), "\nRepo created: %s/%s\n\n", sess.cfg.Username, repoName)
-	fmt.Fprintf(cmd.OutOrStdout(), "Add as a git remote with:\n\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "    git remote add <remote-name> gf://%s/%s\n", sess.cfg.Username, repoName)
-	fmt.Fprintf(cmd.OutOrStdout(), "    git push -u <remote-name> <branch-name>\n\n")
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "\nVault created: %s/%s\n\n", sess.cfg.Username, repoName)
+	fmt.Fprintf(out, "This vault now exists on the server, empty and ready. Whenever you're\n")
+	fmt.Fprintf(out, "ready, you can add it as a new remote to an existing git repo and push\n")
+	fmt.Fprintf(out, "your code to it:\n\n")
+	fmt.Fprintf(out, "    git remote add <remote-name> gf://%s/%s\n", sess.cfg.Username, repoName)
+	fmt.Fprintf(out, "    git push -u <remote-name> <branch-name>\n\n")
+	fmt.Fprintf(out, "<remote-name> is any name you want to give this remote locally\n")
+	fmt.Fprintf(out, "(e.g. \"ghostfork\"). <branch-name> is the branch you want to push\n")
+	fmt.Fprintf(out, "(e.g. \"main\"). Nothing happens until you run these yourself — do this\n")
+	fmt.Fprintf(out, "whenever you're ready.\n\n")
 	return nil
 }

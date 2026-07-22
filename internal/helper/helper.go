@@ -768,7 +768,7 @@ func parseURL(rawURL string) (owner, repo string, err error) {
 	owner = u.Host
 	repo = strings.TrimPrefix(u.Path, "/")
 	if owner == "" || repo == "" {
-		return "", "", fmt.Errorf("URL must be gf://<owner>/<repo>")
+		return "", "", fmt.Errorf("URL must be gf://<owner>/<vault>")
 	}
 	return owner, repo, nil
 }

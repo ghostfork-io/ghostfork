@@ -11,28 +11,28 @@ import (
 )
 
 var addUserCmd = &cobra.Command{
-	Use:   "add-user <repo> <username>",
-	Short: "Grant a user access to a repo",
-	Long: `Grant another registered user access to a repo you can already reach.
+	Use:   "add-user <vault> <username>",
+	Short: "Grant a user access to a vault",
+	Long: `Grant another registered user access to a vault you can already reach.
 
 What happens locally:
   1. Your client fetches the target user's public key from the server.
-  2. Your client fetches and decrypts your own copy of the repo key.
-  3. Your client re-encrypts the repo key with the target user's public
-     key and uploads that new wrapped copy.
+  2. Your client fetches and decrypts your own copy of the vault's key.
+  3. Your client re-encrypts that key with the target user's public
+     key and uploads the new wrapped copy.
 
-The server never sees the plaintext repo key. The target user must
-have already run 'gf login' on their own machine so their public key
-is on file.
+The server never sees the plaintext key. The target user must have
+already run 'gf login' on their own machine so their public key is on
+file.
 
-<repo> can be either 'repo-name' (your own repo) or 'owner/repo-name'
-(someone else's repo that you have access to and want to add another
+<vault> can be either 'vault-name' (your own vault) or 'owner/vault-name'
+(someone else's vault that you have access to and want to add another
 member to).`,
-	Example: `  # Add bob to your own repo
-  gf add-user my-project bob
+	Example: `  # Add bob to your own vault
+  gf add-user myvault bob
 
-  # Add charlie to alice's repo (you must already be a member)
-  gf add-user alice/my-project charlie`,
+  # Add charlie to alice's vault (you must already be a member)
+  gf add-user alice/myvault charlie`,
 	Args: cobra.ExactArgs(2),
 	RunE: runAddUser,
 }

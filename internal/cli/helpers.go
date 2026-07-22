@@ -45,7 +45,7 @@ func parseRepoArg(arg, defaultOwner string) (owner, repo string, err error) {
 		owner, repo = defaultOwner, arg
 	}
 	if owner == "" || repo == "" {
-		return "", "", fmt.Errorf("invalid repo argument %q: owner and repo name must both be non-empty", arg)
+		return "", "", fmt.Errorf("invalid vault argument %q: owner and vault name must both be non-empty", arg)
 	}
 	return owner, repo, nil
 }
