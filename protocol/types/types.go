@@ -17,6 +17,11 @@ type RegisterRequest struct {
 	PublicKey string `json:"public_key,omitempty"`
 	Email     string `json:"email,omitempty"`
 	Password  string `json:"password,omitempty"`
+	// ConfirmPassword is the repeated password from the web registration form.
+	// When present it must equal Password; the server rejects a mismatch. It is
+	// optional so non-browser callers (which have no second field to confirm)
+	// are unaffected.
+	ConfirmPassword string `json:"confirm_password,omitempty"`
 }
 
 type UserResponse struct {
