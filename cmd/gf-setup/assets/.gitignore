@@ -1,0 +1,3 @@
+# gf.exe is copied here at build time and embedded via -tags embedgf.
+# It is a build artifact — never commit it. This file keeps the dir present.
+*.exe

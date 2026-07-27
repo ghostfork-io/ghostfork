@@ -13,7 +13,7 @@ BINDIR   = $(CURDIR)/bin
 # with no reference to the rest of the repo, and keeps working unchanged if
 # this directory is ever published as its own repository.
 
-.PHONY: all build build-all test test-short clean install uninstall
+.PHONY: all build build-all build-windows-installer test test-short clean install uninstall
 
 all: build
 
@@ -42,6 +42,22 @@ build-linux-amd64:
 build-windows-amd64:
 	@mkdir -p $(BINDIR)
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BINDIR)/gf-windows-amd64.exe ./cmd/gf
+
+# ── Windows GUI installer ─────────────────────────────────────────────────────
+# Self-contained gf-setup-windows-amd64.exe: a windowed installer (Install /
+# Uninstall buttons, native widgets via lxn/walk) with gf.exe embedded
+# (-tags embedgf) and no console (-H=windowsgui). Installs gf + git-remote-gf
+# into %LOCALAPPDATA%\Programs\ghostfork, onto the per-user PATH, with an
+# Add/Remove Programs entry. Per-user — no admin/UAC. See docs/windows-installer.md.
+SETUP_LDFLAGS = -ldflags "-X github.com/ghostfork/gf/internal/version.Commit=$(COMMIT)$(DIRTY) -H=windowsgui -s -w"
+
+build-windows-installer: build-windows-amd64
+	@mkdir -p $(BINDIR) cmd/gf-setup/assets
+	cp $(BINDIR)/gf-windows-amd64.exe cmd/gf-setup/assets/gf.exe
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(SETUP_LDFLAGS) -tags embedgf \
+		-o $(BINDIR)/gf-setup-windows-amd64.exe ./cmd/gf-setup
+	@rm -f cmd/gf-setup/assets/gf.exe
+	@echo "built $(BINDIR)/gf-setup-windows-amd64.exe"
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 # No external services needed — client tests run against in-memory fakes.
