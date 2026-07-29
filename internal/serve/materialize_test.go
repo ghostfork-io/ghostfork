@@ -15,10 +15,11 @@ import (
 
 // fakeMatUpstream serves one encrypted packfile per seq and counts downloads.
 type fakeMatUpstream struct {
-	encKey    []byte           // repo key wrapped for the test identity
-	packs     map[int64][]byte // seq → encrypted packfile bytes
-	seqs      []int64
-	downloads int
+	encKey     []byte           // repo key wrapped for the test identity
+	packs      map[int64][]byte // seq → encrypted packfile bytes
+	seqs       []int64
+	generation int // reported key generation (0 → treated as 1)
+	downloads  int
 }
 
 func (f *fakeMatUpstream) GetKey(owner, repo, username string) ([]byte, error) {
@@ -32,7 +33,11 @@ func (f *fakeMatUpstream) ListPackfiles(owner, repo string, afterSeq int64) ([]i
 			out = append(out, s)
 		}
 	}
-	return out, 1, nil
+	gen := f.generation
+	if gen == 0 {
+		gen = 1
+	}
+	return out, gen, nil
 }
 
 func (f *fakeMatUpstream) DownloadPackfile(owner, repo string, seq int64) (io.ReadCloser, error) {
@@ -151,6 +156,73 @@ func TestMaterializerSyncAndIncremental(t *testing.T) {
 	}
 	if got := gitOut(t, gitDir, "--git-dir", gitDir, "show", head2+":b.txt"); got != "beta" {
 		t.Errorf("b.txt content = %q, want beta", got)
+	}
+}
+
+// TestMaterializerRebuildsOnKeyRotation proves the cache is invalidated when
+// the server's key generation changes: after a rotation (new key, new history
+// at a higher generation), Sync wipes the stale mirror and re-materializes
+// under the new key — the old objects are gone, not left dangling under the
+// retired key.
+func TestMaterializerRebuildsOnKeyRotation(t *testing.T) {
+	identity, err := crypto.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key1, _ := crypto.GenerateRepoKey()
+	encKey1, err := crypto.EncryptRepoKey(key1, identity.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	work1 := t.TempDir()
+	gitOut(t, work1, "init", "-q", "-b", "main")
+	pack1, head1 := buildEncryptedPack(t, work1, key1, map[string]string{"old.txt": "before rotation"})
+
+	up := &fakeMatUpstream{
+		encKey:     encKey1,
+		packs:      map[int64][]byte{1: pack1},
+		seqs:       []int64{1},
+		generation: 1,
+	}
+	m := NewMaterializer(up, identity, "alice", t.TempDir())
+
+	gitDir, err := m.Sync("alice", "app")
+	if err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+	if got := gitOut(t, gitDir, "--git-dir", gitDir, "show", head1+":old.txt"); got != "before rotation" {
+		t.Fatalf("pre-rotation content = %q, want 'before rotation'", got)
+	}
+
+	// Rotation: a fresh key re-encrypts a new consolidated history at a higher
+	// seq and generation. The upstream now hands out the new wrapped key.
+	key2, _ := crypto.GenerateRepoKey()
+	encKey2, err := crypto.EncryptRepoKey(key2, identity.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	work2 := t.TempDir()
+	gitOut(t, work2, "init", "-q", "-b", "main")
+	pack2, head2 := buildEncryptedPack(t, work2, key2, map[string]string{"new.txt": "after rotation"})
+	up.encKey = encKey2
+	up.packs = map[int64][]byte{2: pack2}
+	up.seqs = []int64{2}
+	up.generation = 2
+
+	if _, err := m.Sync("alice", "app"); err != nil {
+		t.Fatalf("post-rotation Sync: %v", err)
+	}
+
+	// The new history is present, decrypted under the new key…
+	if got := gitOut(t, gitDir, "--git-dir", gitDir, "show", head2+":new.txt"); got != "after rotation" {
+		t.Errorf("post-rotation content = %q, want 'after rotation'", got)
+	}
+	// …and the pre-rotation commit was wiped, not merely left unreferenced.
+	chk := exec.Command("git", "--git-dir", gitDir, "cat-file", "-t", head1)
+	chk.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+gitDir)
+	if err := chk.Run(); err == nil {
+		t.Errorf("pre-rotation commit %s still present after rotation — cache not invalidated", head1)
 	}
 }
 

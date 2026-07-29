@@ -69,10 +69,14 @@ type CreateRepoRequest struct {
 	Owner string `json:"owner,omitempty"`
 }
 
-// RepoRef identifies one repo by owner (username or org slug) and name.
+// RepoRef identifies one repo by owner (username or org slug) and name, with
+// its branch count — already-plaintext server metadata the dashboard's repo
+// picker shows without decrypting anything.
 type RepoRef struct {
 	Owner string `json:"owner"`
 	Name  string `json:"name"`
+	// Branches is the number of branches (refs/heads/*) the repo has.
+	Branches int `json:"branches"`
 }
 
 // MyReposResponse lists the repos the authenticated caller holds a wrapped

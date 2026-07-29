@@ -17,6 +17,12 @@ type State struct {
 	Repo      string `toml:"repo"` // "owner/name"
 	ServerURL string `toml:"server_url"`
 	LastSeq   int64  `toml:"last_seq"`
+	// Generation is the repo's key generation last materialized. A rotation
+	// bumps it and re-encrypts history under a new key, so cached objects from
+	// an older generation are stale; `gf serve` wipes and re-materializes when
+	// the server reports a different generation. Zero for state written before
+	// this field existed / by the plain pull path (which keys off LastSeq only).
+	Generation int `toml:"generation"`
 }
 
 // Path returns the absolute path of the state file for a given git directory.

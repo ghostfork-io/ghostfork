@@ -135,7 +135,41 @@ func (m *Materializer) Sync(owner, repo string) (gitDir string, err error) {
 	if err != nil {
 		return "", fmt.Errorf("listing packfiles: %w", err)
 	}
+
+	// Key rotation: the server re-encrypted history under a new key and bumped
+	// the generation. Everything cached so far was decrypted with the retired
+	// key, so it is stale — wipe the mirror and re-materialize from scratch
+	// under the new key. (st.Generation == 0 means a first sync or pre-field
+	// state, nothing to invalidate.)
+	if st.Generation != 0 && generation != st.Generation {
+		slog.Info("serve: key rotation detected, rebuilding cache",
+			slog.String("repo", key),
+			slog.Int("cached_generation", st.Generation),
+			slog.Int("server_generation", generation),
+		)
+		if err := os.RemoveAll(gitDir); err != nil {
+			return "", fmt.Errorf("clearing stale cache: %w", err)
+		}
+		if err := ensureBareRepo(gitDir); err != nil {
+			return "", err
+		}
+		st = state.State{} // reset LastSeq/Generation; repacked below
+		seqs, generation, err = m.up.ListPackfiles(owner, repo, 0)
+		if err != nil {
+			return "", fmt.Errorf("listing packfiles: %w", err)
+		}
+	}
+
 	if len(seqs) == 0 {
+		// Nothing to fetch, but still record the (possibly first-seen)
+		// generation so a later rotation is detected.
+		if st.Generation != generation {
+			st.Generation = generation
+			st.Repo = key
+			if err := state.Save(gitDir, st); err != nil {
+				return "", fmt.Errorf("saving cache state: %w", err)
+			}
+		}
 		return gitDir, nil
 	}
 	slog.Info("serve: materializing repo",
@@ -159,6 +193,7 @@ func (m *Materializer) Sync(owner, repo string) (gitDir string, err error) {
 	}
 
 	st.Repo = key
+	st.Generation = generation
 	if err := state.Save(gitDir, st); err != nil {
 		return "", fmt.Errorf("saving cache state: %w", err)
 	}
