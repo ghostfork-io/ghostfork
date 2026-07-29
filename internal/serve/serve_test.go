@@ -24,15 +24,16 @@ const testOrigin = "https://gf.example.com"
 
 // fakeUpstream is a canned Upstream.
 type fakeUpstream struct {
-	repos []types.RepoRef
-	refs  []types.Ref
-	err   error
+	repos         []types.RepoRef
+	refs          []types.Ref
+	defaultBranch string
+	err           error
 }
 
 func (f *fakeUpstream) ListMyRepos() ([]types.RepoRef, error) { return f.repos, f.err }
 
-func (f *fakeUpstream) GetRefs(owner, repo string) ([]types.Ref, error) {
-	return f.refs, f.err
+func (f *fakeUpstream) GetRefs(owner, repo string) ([]types.Ref, string, error) {
+	return f.refs, f.defaultBranch, f.err
 }
 
 // startTestServer binds an ephemeral loopback port and runs the server until

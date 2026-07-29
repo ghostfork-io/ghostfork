@@ -27,7 +27,7 @@ func resolveRef(up Upstream, owner, repo, ref string) (string, error) {
 	if shaRE.MatchString(ref) {
 		return ref, nil
 	}
-	refs, err := up.GetRefs(owner, repo)
+	refs, _, err := up.GetRefs(owner, repo)
 	if err != nil {
 		return "", err
 	}

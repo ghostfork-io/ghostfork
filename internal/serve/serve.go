@@ -44,7 +44,7 @@ type Server struct {
 // need; tests substitute a fake.
 type Upstream interface {
 	ListMyRepos() ([]types.RepoRef, error)
-	GetRefs(owner, repo string) ([]types.Ref, error)
+	GetRefs(owner, repo string) (refs []types.Ref, defaultBranch string, err error)
 }
 
 // Options configures the local server.
@@ -179,7 +179,7 @@ type refsResponse struct {
 func handleRefs(up Upstream) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner, repo := r.PathValue("owner"), r.PathValue("repo")
-		refs, err := up.GetRefs(owner, repo)
+		refs, serverDefault, err := up.GetRefs(owner, repo)
 		if err != nil {
 			writeRepoUpstreamError(w, "listing refs", err)
 			return
@@ -208,7 +208,13 @@ func handleRefs(up Upstream) http.HandlerFunc {
 			}
 			return a.Name < b.Name
 		})
-		out.Default = defaultBranch(out.Refs)
+		// The server tracks the vault's default branch, so prefer its answer.
+		// It is empty for vaults that predate the column or have no branches
+		// yet; fall back to the local main/master/first-alphabetical guess.
+		out.Default = strings.TrimPrefix(serverDefault, "refs/heads/")
+		if out.Default == "" {
+			out.Default = defaultBranch(out.Refs)
+		}
 		writeJSON(w, http.StatusOK, out)
 	}
 }
