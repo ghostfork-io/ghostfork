@@ -8,6 +8,7 @@ package serve
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -72,7 +73,40 @@ func syncAndResolve(w http.ResponseWriter, r *http.Request, opts Options) (gitDi
 		writeRepoUpstreamError(w, "resolving ref", err)
 		return "", "", true
 	}
+
+	// The ref resolved against the server, but the commit it points at must also
+	// be present in the local mirror before any git plumbing can read it. If it
+	// isn't, the incremental Sync above missed it — the classic case is a vault
+	// that was wiped and re-pushed, so packfile seqs restarted below our cached
+	// last_seq and ListPackfiles reported nothing new. Rebuild from scratch and
+	// re-check once. Without this the caller runs `git ls-tree <missing sha>`
+	// and reports a misleading "path not found" for data that is really just
+	// un-fetched.
+	if !commitPresent(gitDir, sha) {
+		slog.Info("serve: resolved commit missing from cache, rebuilding",
+			slog.String("repo", owner+"/"+repo), slog.String("sha", sha))
+		gitDir, err = opts.Materializer.Rebuild(owner, repo)
+		if err != nil {
+			writeRepoUpstreamError(w, "rebuilding repo cache", err)
+			return "", "", true
+		}
+		if !commitPresent(gitDir, sha) {
+			// The branch points at a commit no packfile contains, even after a
+			// full re-fetch — a genuine server-side inconsistency, not a stale
+			// cache. Say so rather than blaming the path.
+			writeError(w, http.StatusBadGateway, "commit_unavailable",
+				fmt.Sprintf("branch %q points at commit %s but no packfile on the server contains it", ref, sha))
+			return "", "", true
+		}
+	}
 	return gitDir, sha, false
+}
+
+// commitPresent reports whether the mirror at gitDir has the given commit
+// object. `git cat-file -e` exits 0 when the object exists, non-zero otherwise.
+func commitPresent(gitDir, sha string) bool {
+	_, _, err := gitObj(gitDir, "cat-file", "-e", sha)
+	return err == nil
 }
 
 // gitObj runs a git command against the bare mirror and returns stdout.

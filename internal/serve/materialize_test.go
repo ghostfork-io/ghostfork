@@ -226,6 +226,83 @@ func TestMaterializerRebuildsOnKeyRotation(t *testing.T) {
 	}
 }
 
+// TestMaterializerRebuildAfterVaultReset covers the case the generation check
+// cannot see: a vault wiped and re-created keeps generation == 1 but restarts
+// its packfile sequence, so after an incremental Sync the cache is pinned to
+// history the server no longer has. ListPackfiles(afterSeq=last_seq) reports
+// nothing new, so a plain Sync leaves the stale commit in place and the new one
+// absent — exactly what made `gf serve` answer "doesn't exist on this branch"
+// for freshly re-pushed data. Rebuild must re-materialize from seq 0.
+func TestMaterializerRebuildAfterVaultReset(t *testing.T) {
+	identity, err := crypto.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Original vault: key1, history reaching seq 2.
+	key1, _ := crypto.GenerateRepoKey()
+	encKey1, err := crypto.EncryptRepoKey(key1, identity.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	work1 := t.TempDir()
+	gitOut(t, work1, "init", "-q", "-b", "main")
+	pack1a, _ := buildEncryptedPack(t, work1, key1, map[string]string{"a.txt": "one"})
+	pack1b, headOld := buildEncryptedPack(t, work1, key1, map[string]string{"b.txt": "two"})
+
+	up := &fakeMatUpstream{
+		encKey:     encKey1,
+		packs:      map[int64][]byte{1: pack1a, 2: pack1b},
+		seqs:       []int64{1, 2},
+		generation: 1,
+	}
+	m := NewMaterializer(up, identity, "alice", t.TempDir())
+
+	gitDir, err := m.Sync("alice", "app")
+	if err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+	if !commitPresent(gitDir, headOld) {
+		t.Fatalf("original commit %s not materialized", headOld)
+	}
+
+	// Vault reset: deleted and re-created, so a brand-new key, a brand-new
+	// history, and the sequence restarts at 1 — while generation stays 1.
+	key2, _ := crypto.GenerateRepoKey()
+	encKey2, err := crypto.EncryptRepoKey(key2, identity.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	work2 := t.TempDir()
+	gitOut(t, work2, "init", "-q", "-b", "main")
+	pack2, headNew := buildEncryptedPack(t, work2, key2, map[string]string{"c.txt": "fresh"})
+	up.encKey = encKey2
+	up.packs = map[int64][]byte{1: pack2}
+	up.seqs = []int64{1}
+	up.generation = 1
+
+	// A plain incremental Sync is blind to the reset: seq 1 <= cached last_seq 2,
+	// so nothing is fetched and the new commit stays absent. This is the bug.
+	if _, err := m.Sync("alice", "app"); err != nil {
+		t.Fatalf("post-reset Sync: %v", err)
+	}
+	if commitPresent(gitDir, headNew) {
+		t.Fatalf("incremental Sync unexpectedly fetched the reset history; the test no longer models the bug")
+	}
+
+	// Rebuild re-materializes from seq 0 under the new key: the new commit
+	// appears and the stale one is gone.
+	if _, err := m.Rebuild("alice", "app"); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	if !commitPresent(gitDir, headNew) {
+		t.Errorf("commit %s missing after Rebuild — reset history not re-fetched", headNew)
+	}
+	if commitPresent(gitDir, headOld) {
+		t.Errorf("stale commit %s still present after Rebuild — cache not wiped", headOld)
+	}
+}
+
 func TestMaterializerRejectsBadNames(t *testing.T) {
 	m := NewMaterializer(&fakeMatUpstream{}, nil, "alice", t.TempDir())
 	for _, bad := range []string{"..", "a/b", ".hidden", "", "a b", strings.Repeat("x", 65)} {

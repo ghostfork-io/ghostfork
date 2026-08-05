@@ -105,6 +105,22 @@ func (m *Materializer) lockRepo(key string) *sync.Mutex {
 // at a higher seq, so the incremental path picks it up naturally, same as a
 // normal pull).
 func (m *Materializer) Sync(owner, repo string) (gitDir string, err error) {
+	return m.sync(owner, repo, false)
+}
+
+// Rebuild discards the cached mirror and re-materializes the repo from packfile
+// seq 0. The caller uses it when an incremental Sync leaves the cache pinned to
+// history the server no longer has: the vault was deleted and re-created, so its
+// packfile sequence restarted at or below our recorded last_seq and
+// ListPackfiles (which returns only seqs greater than last_seq) reports nothing
+// new even though every cached object is stale. Key rotation is handled inside
+// sync via the generation field; this covers the reset case, which keeps
+// generation == 1 and so is invisible to that check.
+func (m *Materializer) Rebuild(owner, repo string) (gitDir string, err error) {
+	return m.sync(owner, repo, true)
+}
+
+func (m *Materializer) sync(owner, repo string, forceFull bool) (gitDir string, err error) {
 	if !nameRE.MatchString(owner) || !nameRE.MatchString(repo) {
 		return "", errBadName
 	}
@@ -113,6 +129,13 @@ func (m *Materializer) Sync(owner, repo string) (gitDir string, err error) {
 	defer l.Unlock()
 
 	gitDir = filepath.Join(m.root, owner, repo+".git")
+	// forceFull wipes the mirror before we touch it, so the state below loads
+	// empty (LastSeq/Generation zero) and every packfile is re-fetched from 0.
+	if forceFull {
+		if err := os.RemoveAll(gitDir); err != nil {
+			return "", fmt.Errorf("clearing cache for rebuild: %w", err)
+		}
+	}
 	if err := ensureBareRepo(gitDir); err != nil {
 		return "", err
 	}
