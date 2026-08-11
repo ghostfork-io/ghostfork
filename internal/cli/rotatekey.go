@@ -25,23 +25,23 @@ import (
 const rotatePreviewLimit = 10 * 1024
 
 var rotateKeyCmd = &cobra.Command{
-	Use:   "rotate-key <repo>",
-	Short: "Rotate a repo's encryption key and re-encrypt its history",
-	Long: `Generate a fresh repo key, re-encrypt the repo's entire history under it,
+	Use:   "rotate-key <vault>",
+	Short: "Rotate a vault's encryption key and re-encrypt its history",
+	Long: `Generate a fresh vault key, re-encrypt the vault's entire history under it,
 and re-wrap the new key for every current member.
 
 This closes the gap left by remove-user: a removed user who recorded the
-old repo key can still decrypt blobs encrypted with it. After rotation the
+old vault key can still decrypt blobs encrypted with it. After rotation the
 server stores only ciphertext under the new key, so the old key is useless.
 
 To actually revoke someone, remove them first, then rotate:
 
-    gf remove-user my-repo bob     # drops bob's access
-    gf rotate-key my-repo          # re-keys so bob's old key opens nothing
+    gf remove-user my-vault bob     # drops bob's access
+    gf rotate-key my-vault          # re-keys so bob's old key opens nothing
 
 What happens locally (the server never sees a plaintext key):
-  1. Your client clones the repo (decrypting it with the current key).
-  2. A new repo key is generated and all objects are repacked and encrypted
+  1. Your client clones the vault (decrypting it with the current key).
+  2. A new vault key is generated and all objects are repacked and encrypted
      with it into one consolidated packfile.
   3. The new packfile is uploaded and the new key is wrapped for each
      remaining member; the server swaps everything over atomically.
@@ -193,7 +193,7 @@ func runRotateKey(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(out, "\nRotated %s/%s to key generation %d.\n", owner, repo, resp.Generation)
 	fmt.Fprintf(out, "History re-encrypted under a new key and re-wrapped for %d member(s): %s.\n",
 		len(wrapped), strings.Join(members, ", "))
-	fmt.Fprintf(out, "Anyone removed before this rotation can no longer decrypt the repo.\n\n")
+	fmt.Fprintf(out, "Anyone removed before this rotation can no longer decrypt the vault.\n\n")
 	return nil
 }
 

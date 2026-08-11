@@ -19,8 +19,8 @@ var (
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Serve decrypted repo data to the local web dashboard",
-	Long: `Start a local read-only HTTP server the web dashboard's repo browser talks
+	Short: "Serve decrypted vault data to the local web dashboard",
+	Long: `Start a local read-only HTTP server the web dashboard's vault browser talks
 to. The server binds 127.0.0.1 only — it is never reachable from the
 network — and runs in the foreground until Ctrl+C.
 
