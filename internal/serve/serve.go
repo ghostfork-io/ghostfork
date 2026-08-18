@@ -132,6 +132,8 @@ func newHandler(opts Options) http.Handler {
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/tree", handleTree(opts))
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/blob", handleBlob(opts))
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/commits", handleCommits(opts))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/commit", handleCommit(opts))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/tree-commits", handleTreeCommits(opts))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleRoot)
