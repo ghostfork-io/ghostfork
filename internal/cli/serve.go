@@ -109,10 +109,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	srv, err := serve.Listen(serve.Options{
-		Port:     servePort,
-		Token:    token,
-		Origin:   origin,
-		Upstream: sess.client,
+		Port:      servePort,
+		Token:     token,
+		Origin:    origin,
+		Upstream:  sess.client,
+		ServerURL: sess.cfg.ServerURL,
+		Username:  sess.cfg.Username,
 		Materializer: serve.NewMaterializer(
 			sess.client, sess.identity, sess.cfg.Username, cacheRoot),
 	})

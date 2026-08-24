@@ -62,6 +62,16 @@ type Options struct {
 	// Materializer maintains the local decrypted bare repos the object-level
 	// endpoints (tree, blob, history) read from.
 	Materializer *Materializer
+	// ServerURL and Username describe who this helper authenticates to the gf
+	// server as; the session endpoint reports them so the dashboard's "how this
+	// works" dialog names the real identity rather than a placeholder.
+	ServerURL string
+	Username  string
+	// Addr and StartedAt are filled in by Listen once the port is bound, so the
+	// session endpoint reports the actual address (ephemeral ports included)
+	// and a real start time rather than anything the caller guessed.
+	Addr      string
+	StartedAt time.Time
 }
 
 // Origin derives the dashboard origin CORS must admit from the configured
@@ -87,6 +97,10 @@ func Listen(opts Options) (*Server, error) {
 			"cannot listen on %s (is another gf serve or other program using the port? use --port to pick a different one): %w",
 			addr, err)
 	}
+	// Now that the port is bound, the session endpoint can report the real
+	// address and a start time the user can match against their terminal.
+	opts.Addr = ln.Addr().String()
+	opts.StartedAt = time.Now()
 	return &Server{
 		ln: ln,
 		httpSrv: &http.Server{
@@ -134,6 +148,7 @@ func newHandler(opts Options) http.Handler {
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/commits", handleCommits(opts))
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/commit", handleCommit(opts))
 	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/tree-commits", handleTreeCommits(opts))
+	v1.HandleFunc("GET /v1/repos/{owner}/{repo}/session", handleSession(opts))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleRoot)

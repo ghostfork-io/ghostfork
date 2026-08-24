@@ -70,6 +70,10 @@ func newBrowseFixture(t *testing.T) *browseFixture {
 	base := startTestServer(t, func(o *Options) {
 		o.Upstream = &fakeUpstream{refs: []types.Ref{{Branch: "refs/heads/main", CommitSHA: h3}}}
 		o.Materializer = mat
+		// Mirror what cmd/gf wires up, so the session endpoint reports a real
+		// identity here too.
+		o.Username = "alice"
+		o.ServerURL = "https://gf.example.com"
 	})
 	return &browseFixture{base: base, heads: heads}
 }

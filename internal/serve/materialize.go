@@ -1,8 +1,11 @@
 package serve
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -46,8 +49,23 @@ type Materializer struct {
 	username string
 	root     string
 
-	mu    sync.Mutex             // guards repos
+	mu    sync.Mutex             // guards repos and stats
 	repos map[string]*sync.Mutex // per-repo sync lock
+	stats map[string]*VaultStats // per-repo transfer counters, this session
+}
+
+// VaultStats is what this session's decryption pipeline actually moved for one
+// vault: measured by the same counting readers that drive the unpack, not
+// estimated. The session endpoint reports these so a user can see real numbers
+// for the page in front of them instead of a reassuring sentence.
+type VaultStats struct {
+	// PackfilesFetched is how many encrypted packfiles were pulled from the
+	// server.
+	PackfilesFetched int64
+	// CiphertextBytes is what came off the wire; PlaintextBytes is what came
+	// out of decryption locally and never left this machine.
+	CiphertextBytes int64
+	PlaintextBytes  int64
 }
 
 // NewMaterializer returns a Materializer caching under root (created lazily,
@@ -59,6 +77,7 @@ func NewMaterializer(up MaterializeUpstream, identity *crypto.Identity, username
 		username: username,
 		root:     root,
 		repos:    make(map[string]*sync.Mutex),
+		stats:    make(map[string]*VaultStats),
 	}
 }
 
@@ -207,11 +226,12 @@ func (m *Materializer) sync(owner, repo string, forceFull bool) (gitDir string, 
 		if err != nil {
 			return "", fmt.Errorf("downloading packfile seq=%d: %w", seq, err)
 		}
-		_, _, err = helper.UnpackEncrypted(body, repoKey, gitDir)
+		plainBytes, cipherBytes, err := helper.UnpackEncrypted(body, repoKey, gitDir)
 		body.Close()
 		if err != nil {
 			return "", fmt.Errorf("unpacking packfile seq=%d: %w", seq, err)
 		}
+		m.record(key, plainBytes, cipherBytes)
 		st.LastSeq = seq
 	}
 
@@ -238,4 +258,83 @@ func ensureBareRepo(dir string) error {
 		return fmt.Errorf("git init --bare: %w\n%s", err, out)
 	}
 	return nil
+}
+
+// ── Session reporting ────────────────────────────────────────────────────────
+
+// record adds one packfile's measured transfer to a vault's session counters.
+func (m *Materializer) record(key string, plaintext, ciphertext int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.stats[key]
+	if st == nil {
+		st = &VaultStats{}
+		m.stats[key] = st
+	}
+	st.PackfilesFetched++
+	st.CiphertextBytes += ciphertext
+	st.PlaintextBytes += plaintext
+}
+
+// Stats returns a vault's counters for this session. A vault that has not been
+// fetched yet reports zeroes, which is the honest answer rather than an error.
+func (m *Materializer) Stats(owner, repo string) VaultStats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if st := m.stats[owner+"/"+repo]; st != nil {
+		return *st
+	}
+	return VaultStats{}
+}
+
+// keyFingerprintLabel domain-separates the fingerprint hash so its output can
+// never be mistaken for, or used as, key material.
+const keyFingerprintLabel = "ghostfork-repo-key-fingerprint\x00"
+
+// KeyFingerprint returns a short, stable fingerprint of the vault key this
+// machine decrypts with — the SSH-style "is this the key I think it is?"
+// check, letting a user confirm the browser is showing data unwrapped with
+// their own key. It is a truncated domain-separated SHA-256 over a 256-bit
+// key, so it identifies the key without weakening it.
+func (m *Materializer) KeyFingerprint(owner, repo string) (string, error) {
+	if !nameRE.MatchString(owner) || !nameRE.MatchString(repo) {
+		return "", errBadName
+	}
+	encKey, err := m.up.GetKey(owner, repo, m.username)
+	if err != nil {
+		return "", fmt.Errorf("fetching repo key: %w", err)
+	}
+	repoKey, err := crypto.DecryptRepoKey(encKey, m.identity)
+	if err != nil {
+		return "", fmt.Errorf("decrypting repo key: %w", err)
+	}
+	sum := sha256.Sum256(append([]byte(keyFingerprintLabel), repoKey...))
+	return "SHA256:" + hex.EncodeToString(sum[:8]), nil
+}
+
+// CacheBytes reports how much decrypted data for a vault is already on this
+// machine: the size of its bare mirror. The session dialog needs this because
+// the transfer counters above are per-process, so a vault materialized on an
+// earlier run legitimately reports zero bytes fetched — and a bare "0 B" in a
+// trust panel reads as a broken number rather than the reassurance it is.
+// Together they say the true thing: nothing was fetched because everything was
+// already here, decrypted.
+func (m *Materializer) CacheBytes(owner, repo string) int64 {
+	if !nameRE.MatchString(owner) || !nameRE.MatchString(repo) {
+		return 0
+	}
+	var total int64
+	root := filepath.Join(m.root, owner, repo+".git")
+	// A missing mirror (never browsed) sums to zero, which is correct; any
+	// other walk error is not worth failing the whole dialog over.
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // partial size beats no dialog
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
