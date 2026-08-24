@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	servePort         int
-	serveResetPairing bool
+	servePort          int
+	serveResetPairing  bool
+	serveStablePairing bool
 )
 
 var serveCmd = &cobra.Command{
@@ -28,9 +29,17 @@ The dashboard fetches encrypted data from the Ghostfork server through this
 helper, which decrypts it locally; the server never sees plaintext, even
 while you browse. See docs/gf-serve-api.md for the HTTP API.
 
-On first run a pairing token is generated and printed; paste it into the
-dashboard when prompted. The token persists across runs, so pairing happens
-once. Requests without it are rejected — being on localhost is not enough,
+A pairing token is printed at every start; paste it into the dashboard when
+prompted. By DEFAULT the token is freshly generated on each run and kept only
+in memory — nothing is written to disk, so there is no long-lived credential
+to leak, and the token stops working the moment this process exits. The
+trade-off is that the dashboard must be paired again every time you start the
+helper.
+
+Pass --stable-pairing to keep one token across runs instead (stored in the gf
+config directory, mode 0600), so you pair the dashboard only once.
+
+Requests without the token are rejected — being on localhost is not enough,
 since any local process or web page can reach 127.0.0.1.`,
 	Example: `  # Serve on the default port (7777)
   gf serve
@@ -38,16 +47,37 @@ since any local process or web page can reach 127.0.0.1.`,
   # Serve on a different port
   gf serve --port 8888
 
-  # Invalidate the old pairing token and print a fresh one
-  gf serve --reset-pairing`,
+  # Reuse one token across runs, so you pair the dashboard only once
+  gf serve --stable-pairing
+
+  # Replace the stored token from --stable-pairing with a fresh one
+  gf serve --stable-pairing --reset-pairing`,
 	Args: cobra.NoArgs,
 	RunE: runServe,
 }
 
 func init() {
 	serveCmd.Flags().IntVar(&servePort, "port", serve.DefaultPort, "loopback port to listen on")
+	serveCmd.Flags().BoolVar(&serveStablePairing, "stable-pairing", false,
+		"reuse one stored pairing token across runs instead of a fresh one per start")
 	serveCmd.Flags().BoolVar(&serveResetPairing, "reset-pairing", false,
-		"generate a new pairing token, invalidating the old one")
+		"replace the stored --stable-pairing token with a fresh one")
+}
+
+// pairingToken returns the token this run will accept: a fresh in-memory one by
+// default, or the stored one under --stable-pairing. Passing --reset-pairing
+// without --stable-pairing is harmless but means nothing — every run already
+// rotates — so say so instead of silently ignoring it.
+func pairingToken(cmd *cobra.Command) (string, error) {
+	if !serveStablePairing {
+		if serveResetPairing {
+			fmt.Fprintln(cmd.ErrOrStderr(),
+				"note: --reset-pairing does nothing on its own — a fresh token is "+
+					"generated every run by default. It applies to --stable-pairing.")
+		}
+		return serve.NewToken()
+	}
+	return serve.LoadOrCreateToken(serve.TokenPath(), serveResetPairing)
 }
 
 func runServe(cmd *cobra.Command, _ []string) error {
@@ -66,7 +96,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	token, err := serve.LoadOrCreateToken(serve.TokenPath(), serveResetPairing)
+	// Default: a fresh in-memory token per run. --stable-pairing opts back into
+	// the stored one, and only then does --reset-pairing mean anything.
+	token, err := pairingToken(cmd)
 	if err != nil {
 		return err
 	}
@@ -93,10 +125,18 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "gf serve listening on http://%s\n", srv.Addr())
-	if serveResetPairing {
+	if serveStablePairing && serveResetPairing {
 		fmt.Fprintln(out, "Pairing token rotated — previously paired dashboards must re-pair.")
 	}
 	fmt.Fprintf(out, "Pairing token: %s   (paste into the dashboard when prompted)\n", token)
+	if serveStablePairing {
+		fmt.Fprintln(out, "This token is stored and reused, so you only pair once.")
+	} else {
+		// Say plainly why a previously-working token stopped working, rather
+		// than leaving the user to guess at the dashboard's 401.
+		fmt.Fprintln(out, "New for this run and never written to disk — any earlier token is now dead,")
+		fmt.Fprintln(out, "so pair the dashboard again. Use --stable-pairing to keep one token instead.")
+	}
 	fmt.Fprintln(out, "Press Ctrl+C to stop.")
 	// The token itself never goes to the log file — the log is not permission-
 	// protected the way the token file is.
