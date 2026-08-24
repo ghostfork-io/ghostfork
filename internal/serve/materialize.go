@@ -1,8 +1,6 @@
 package serve
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -287,15 +285,12 @@ func (m *Materializer) Stats(owner, repo string) VaultStats {
 	return VaultStats{}
 }
 
-// keyFingerprintLabel domain-separates the fingerprint hash so its output can
-// never be mistaken for, or used as, key material.
-const keyFingerprintLabel = "ghostfork-repo-key-fingerprint\x00"
-
 // KeyFingerprint returns a short, stable fingerprint of the vault key this
-// machine decrypts with — the SSH-style "is this the key I think it is?"
-// check, letting a user confirm the browser is showing data unwrapped with
-// their own key. It is a truncated domain-separated SHA-256 over a 256-bit
-// key, so it identifies the key without weakening it.
+// machine decrypts with, so a user can compare it against what
+// `gf key-fingerprint` prints and confirm the browser is showing data unwrapped
+// with their own key. Both sides call crypto.RepoKeyFingerprint, because a
+// fingerprint you are told to compare is worthless if the two ends can compute
+// it differently.
 func (m *Materializer) KeyFingerprint(owner, repo string) (string, error) {
 	if !nameRE.MatchString(owner) || !nameRE.MatchString(repo) {
 		return "", errBadName
@@ -308,8 +303,7 @@ func (m *Materializer) KeyFingerprint(owner, repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("decrypting repo key: %w", err)
 	}
-	sum := sha256.Sum256(append([]byte(keyFingerprintLabel), repoKey...))
-	return "SHA256:" + hex.EncodeToString(sum[:8]), nil
+	return crypto.RepoKeyFingerprint(repoKey), nil
 }
 
 // CacheBytes reports how much decrypted data for a vault is already on this

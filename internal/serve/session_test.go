@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/ghostfork/gf/crypto"
 )
 
 // TestServeUpstreamIsReadOnly is what makes the session endpoint's
@@ -122,5 +124,40 @@ func TestKeyFingerprintIsStableAndNotTheKey(t *testing.T) {
 	// 8 bytes of hash is plenty to identify a key and far too little to be one.
 	if hexPart := strings.TrimPrefix(a.Vault.KeyFingerprint, "SHA256:"); len(hexPart) != 16 {
 		t.Errorf("fingerprint hex = %q (%d chars), want 16", hexPart, len(hexPart))
+	}
+}
+
+// TestKeyFingerprintMatchesCryptoHelper is the test that keeps the dialog's
+// "compare this against `gf key-fingerprint`" instruction honest. Both sides
+// must derive the fingerprint from crypto.RepoKeyFingerprint; if the helper
+// ever computes it another way, the two values diverge and the instruction
+// becomes actively misleading — telling a user to verify, then showing them a
+// mismatch on a perfectly healthy vault.
+func TestKeyFingerprintMatchesCryptoHelper(t *testing.T) {
+	repoKey, err := crypto.GenerateRepoKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := crypto.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encKey, err := crypto.EncryptRepoKey(repoKey, identity.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A materializer whose upstream serves exactly this wrapped key.
+	mat := NewMaterializer(&fakeMatUpstream{encKey: encKey}, identity, "alice", t.TempDir())
+
+	got, err := mat.KeyFingerprint("alice", "app")
+	if err != nil {
+		t.Fatalf("KeyFingerprint: %v", err)
+	}
+	// What `gf key-fingerprint` prints for the same key.
+	want := crypto.RepoKeyFingerprint(repoKey)
+	if got != want {
+		t.Errorf("helper reports %q but the CLI would print %q — the dialog tells "+
+			"users to compare these, so they must be derived identically", got, want)
 	}
 }

@@ -97,6 +97,7 @@ func init() {
 	rootCmd.AddCommand(rotateKeyCmd)
 	rootCmd.AddCommand(switchUserCmd)
 	rootCmd.AddCommand(keyCmd)
+	rootCmd.AddCommand(keyFingerprintCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(serveCmd)
 

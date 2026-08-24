@@ -283,3 +283,22 @@ func indexAAD(idx uint64) []byte {
 	binary.LittleEndian.PutUint64(b, idx)
 	return b
 }
+
+// repoKeyFingerprintLabel domain-separates the fingerprint hash so its output
+// can never be mistaken for, or used as, key material.
+const repoKeyFingerprintLabel = "ghostfork-repo-key-fingerprint\x00"
+
+// RepoKeyFingerprint returns a short, stable identifier for a vault key: the
+// SSH-style "is this the key I think it is?" check. It exists so a user can
+// compare two INDEPENDENTLY produced values — one printed by `gf
+// key-fingerprint`, one shown in the dashboard's session dialog — and see that
+// the browser is displaying data unwrapped with their own key. That comparison
+// is only meaningful if both sides compute it identically, which is why this
+// lives here rather than being reimplemented at each call site.
+//
+// It is a truncated, domain-separated SHA-256 over a 256-bit key: enough to
+// identify the key, far too little to be one.
+func RepoKeyFingerprint(repoKey []byte) string {
+	sum := sha256.Sum256(append([]byte(repoKeyFingerprintLabel), repoKey...))
+	return "SHA256:" + hex.EncodeToString(sum[:8])
+}
