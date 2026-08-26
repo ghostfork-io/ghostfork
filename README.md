@@ -64,37 +64,61 @@ Everything after `gf login` is plain Git. Your editors, hooks, branches, and wor
 
 ## Installation
 
-Grab a binary from [Releases](https://github.com/ghostfork-io/ghostfork/releases), or build from source. Git itself is the only other requirement.
+Git is the only other requirement.
 
-**macOS / Linux (binary):**
+**macOS / Linux:**
 
 ```bash
-# pick your platform: gf-darwin-arm64, gf-darwin-amd64, gf-linux-amd64
+curl -sSL https://ghostfork.io/install.sh | sh
+```
+
+**Windows:**
+
+```powershell
+irm https://ghostfork.io/install.ps1 | iex
+```
+
+That's it. The installer picks the right build for your machine, checks it
+against the release's `SHA256SUMS`, installs `gf` plus the `git-remote-gf`
+helper Git needs for `gf://` remotes, and puts them on your `PATH`. Open a new
+terminal and run `gf login`.
+
+**To upgrade,** run the same command again — it replaces the binary in place.
+**To uninstall** on Windows, use Settings → Apps; on macOS/Linux, delete `gf`
+and `git-remote-gf` from `~/.local/bin`.
+
+<details>
+<summary>Prefer to do it yourself?</summary>
+
+Every release publishes plain binaries — `gf-darwin-arm64`, `gf-darwin-amd64`,
+`gf-linux-amd64`, `gf-linux-arm64`, `gf-windows-amd64.exe` — plus a
+`SHA256SUMS`, on the [Releases](https://github.com/ghostfork-io/ghostfork/releases)
+page.
+
+```bash
+# macOS / Linux — substitute your platform
 curl -sSLo gf https://github.com/ghostfork-io/ghostfork/releases/latest/download/gf-linux-amd64
 chmod +x gf
 mkdir -p ~/.local/bin && mv gf ~/.local/bin/gf
-# git discovers gf:// remotes through this name:
+# Git discovers gf:// remotes through this name:
 ln -sf ~/.local/bin/gf ~/.local/bin/git-remote-gf
 ```
 
 Make sure `~/.local/bin` is on your `PATH`.
 
-**macOS / Linux (from source, requires Go 1.25+):**
+From source (requires Go 1.25+):
 
 ```bash
 git clone https://github.com/ghostfork-io/ghostfork.git
 cd ghostfork
-make install     # installs gf + the git-remote-gf link to ~/.local/bin, updates PATH
+make install     # gf + the git-remote-gf link to ~/.local/bin, updates PATH
 ```
 
-**Windows:**
+The install script honours `GF_VERSION` to pin a release, `GF_INSTALL_DIR` to
+choose where binaries land, and `NO_MODIFY_PATH=1` to leave your shell config
+alone.
 
-Download `gf-windows-amd64.exe` from Releases, then in a folder on your `PATH`:
-
-```powershell
-copy gf-windows-amd64.exe gf.exe
-copy gf-windows-amd64.exe git-remote-gf.exe
-```
+</details>
 
 The `git-remote-gf` name is how Git finds the helper for `gf://` URLs — it must sit next to `gf` on your `PATH`. No daemon, no background service: Git invokes the helper only for pushes and pulls.
 

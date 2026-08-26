@@ -25,7 +25,10 @@ build:
 
 # ── Cross-platform builds ────────────────────────────────────────────────────
 
-build-all: build-darwin-arm64 build-darwin-amd64 build-linux-amd64 build-windows-amd64
+# Every target here is a published release asset, and install.sh picks between
+# them from `uname -s`/`uname -m` — so adding a platform means adding it here
+# AND shipping it in the next release, or install.sh 404s for those users.
+build-all: build-darwin-arm64 build-darwin-amd64 build-linux-amd64 build-linux-arm64 build-windows-amd64
 
 build-darwin-arm64:
 	@mkdir -p $(BINDIR)
@@ -38,6 +41,10 @@ build-darwin-amd64:
 build-linux-amd64:
 	@mkdir -p $(BINDIR)
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o $(BINDIR)/gf-linux-amd64 ./cmd/gf
+
+build-linux-arm64:
+	@mkdir -p $(BINDIR)
+	GOOS=linux   GOARCH=arm64 go build $(LDFLAGS) -o $(BINDIR)/gf-linux-arm64 ./cmd/gf
 
 build-windows-amd64:
 	@mkdir -p $(BINDIR)
