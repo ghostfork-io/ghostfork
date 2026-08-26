@@ -254,14 +254,11 @@ func (c *Client) DeletePackfile(owner, repo string, seq int64) error {
 // If the bytes sent on the wire do not match bodyHashHex the server rejects
 // with 401 (returned here as a generic HTTP error).
 //
-// branch is the push target (e.g. "main"); it is recorded server-side for
-// per-branch packfile counts. Empty means "don't attribute". It travels in the
-// query string, so the request signature (which covers path+query) protects it.
-func (c *Client) UploadPackfile(owner, repo, branch string, body io.Reader, size int64, bodyHashHex string) (int64, error) {
+// The pack is uploaded unattributed: it covers a whole push rather than one
+// branch, and SetRefs — which already names every ref of the push — records
+// that attribution when it promotes the pack out of quarantine.
+func (c *Client) UploadPackfile(owner, repo string, body io.Reader, size int64, bodyHashHex string) (int64, error) {
 	path := repoPath(owner, repo) + "/packfiles"
-	if branch != "" {
-		path += "?branch=" + url.QueryEscape(branch)
-	}
 	req, err := http.NewRequest(http.MethodPost, c.BaseURL+path, body)
 	if err != nil {
 		return 0, err

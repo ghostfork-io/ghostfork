@@ -469,6 +469,23 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 		return nil
 	}
 
+	// The first branch in a push claims the vault's default when it has none
+	// (SetRefs, GitHub's "first push wins" rule). git hands us `git push --all`
+	// specs in ref order, so on a multi-branch first push an arbitrary
+	// alphabetical winner — "feature/x" ahead of "main" — would become the
+	// default the browser preselects and `git clone` checks out. Put the
+	// branch HEAD is on first instead, which is the one the user is actually
+	// working on. Detached HEAD, or a HEAD not being pushed, leaves the order
+	// as git gave it.
+	if head, err := headRef(gitEnv); err == nil {
+		for i, s := range staged {
+			if s.dst == head {
+				staged[0], staged[i] = staged[i], staged[0]
+				break
+			}
+		}
+	}
+
 	// Build, encrypt, and upload the single pack covering every staged tip.
 	tips := make([]string, len(staged))
 	for i, s := range staged {
@@ -526,6 +543,18 @@ func (h *helper) handlePush(w io.Writer, batch []string) error {
 
 	fmt.Fprintln(w) // blank line ends push response
 	return nil
+}
+
+// headRef returns the full ref name HEAD points at (e.g. refs/heads/main), or
+// an error when HEAD is detached. gitEnv must carry GIT_DIR.
+func headRef(gitEnv []string) (string, error) {
+	cmd := exec.Command("git", "symbolic-ref", "--quiet", "HEAD")
+	cmd.Env = gitEnv
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("reading HEAD: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // resolveRef resolves a local ref (or any rev) to its commit SHA via
@@ -658,15 +687,15 @@ func (h *helper) stagePack(tips []string, repoKey []byte, serverRefs []types.Ref
 			base64.StdEncoding.EncodeToString(preview[:n]))
 	}
 
-	// One pack spans every pushed ref, so there is no single branch to label it
-	// with; the hint is left empty (stored NULL, "unattributed"). Per-branch
-	// packfile attribution is a casualty of single-pack pushes — it only fed
-	// the admin dashboard's per-branch counts, never correctness.
-	const noBranchHint = ""
-
+	// The pack goes up unattributed: it spans every pushed ref, so there is no
+	// single branch to label it with, and the commit call below names them all
+	// anyway — the server attributes the pack to that list when it promotes it
+	// out of quarantine. Attribution is dashboard metadata only; the pack's
+	// contents and every correctness property are independent of it.
+	//
 	// Upload by streaming the temp file. UploadPackfile reads it to EOF; we
 	// keep the handle open until the call returns, then defer removes it.
-	seq, err := h.client.UploadPackfile(h.owner, h.repo, noBranchHint, tmp, size, bodyHash)
+	seq, err := h.client.UploadPackfile(h.owner, h.repo, tmp, size, bodyHash)
 	tmp.Close()
 	if err != nil {
 		return 0, fmt.Errorf("uploading packfile: %w", err)
