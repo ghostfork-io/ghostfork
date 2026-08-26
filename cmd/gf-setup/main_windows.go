@@ -9,6 +9,11 @@
 //
 //	--uninstall   remove gf (the Add/Remove Programs UninstallString)
 //	--silent      no UI at all (QuietUninstallString / scripted install)
+//
+// The --silent paths report failure through the EXIT CODE (0 = installed,
+// 1 = failed). That is the only channel available: this binary is built for
+// the GUI subsystem (-H=windowsgui), so it has no console to print to, and
+// install.ps1 has nothing else to check.
 package main
 
 import (
@@ -29,9 +34,13 @@ func main() {
 
 	switch {
 	case *silent && *uninstall:
-		_, _ = wininstall.Uninstall()
+		if _, err := wininstall.Uninstall(); err != nil {
+			os.Exit(1)
+		}
 	case *silent:
-		headlessInstall()
+		if err := headlessInstall(); err != nil {
+			os.Exit(1)
+		}
 	case *uninstall:
 		// Add/Remove Programs → Uninstall: confirm + act via message boxes,
 		// no main window needed.
@@ -52,17 +61,21 @@ func main() {
 	}
 }
 
-func headlessInstall() {
+// headlessInstall performs the install with no UI, returning the first error
+// that stopped it. Every failure must surface: the caller turns a non-nil
+// error into a non-zero exit code, which is all install.ps1 has to go on.
+// Swallowing them here made a failed scripted install look like a success.
+func headlessInstall() error {
 	dir, err := wininstall.DefaultInstallDir()
 	if err != nil {
-		return
+		return err
 	}
 	payload, err := gfPayload()
 	if err != nil {
-		return
+		return err
 	}
 	self, _ := os.Executable()
-	_ = wininstall.Install(payload, self, dir, version.Version)
+	return wininstall.Install(payload, self, dir, version.Version)
 }
 
 func runGUI() {

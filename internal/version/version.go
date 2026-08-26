@@ -12,7 +12,13 @@ import "fmt"
 
 // Version is the semver release version of gf. It is baked into the source
 // and bumped by hand on a release; it is not injected at build time.
-const Version = "v1.0.0-genesis"
+//
+// This is the ONLY source of truth for it. The public mirror
+// (github.com/ghostfork-io/ghostfork) is force-pushed from this repository by
+// ci/src/publish-client.ts, so a bump made only over there is silently
+// reverted by the next publish — which is exactly what happened between
+// v1.0.0-genesis and v1.1.0. Bump it HERE, then release. See docs/releasing.md.
+const Version = "v1.1.0"
 
 // Commit is the git commit the binary was built from, in short form with a
 // "-dirty" suffix when the working tree had uncommitted changes at build time
