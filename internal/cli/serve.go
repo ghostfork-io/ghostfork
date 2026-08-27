@@ -127,6 +127,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "gf serve listening on http://%s\n", srv.Addr())
+	// The helper answers exactly one browser origin, derived from the logged-in
+	// server URL. When it doesn't match the dashboard the user actually has
+	// open, every request fails CORS — and the browser reports that in a way
+	// indistinguishable from the helper being down or a permission being
+	// denied. Printing it makes a mismatch a two-second check instead of an
+	// invisible dead end.
+	fmt.Fprintf(out, "Serving the dashboard at %s   (only this origin is accepted)\n", origin)
 	if serveStablePairing && serveResetPairing {
 		fmt.Fprintln(out, "Pairing token rotated — previously paired dashboards must re-pair.")
 	}
