@@ -322,8 +322,16 @@ func writeRepoUpstreamError(w http.ResponseWriter, doing string, err error) {
 // cors admits exactly one origin — the dashboard's (the gf server's web
 // origin) — and answers its preflights. Never a wildcard: the response body
 // is decrypted repo data, and the pairing token in the Authorization header
-// is what preflights ask permission for. The Private-Network-Access header
-// answers Chrome's extra preflight for public-page → loopback requests.
+// is what preflights ask permission for.
+//
+// The Private-Network-Access header answers Chrome's extra preflight for
+// public-page → loopback requests. Note that it is NOT sufficient on current
+// Chrome: Private Network Access was put on hold and replaced by Local Network
+// Access (Chrome 142), which gates public → loopback behind a USER PERMISSION
+// no response header can grant. Nothing the helper sends can unblock that —
+// the dashboard has to ask for the permission from a user gesture (see
+// HelperSection's blocked state). The header stays because it still costs
+// nothing and older Chrome honours it.
 func cors(origin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Origin")
