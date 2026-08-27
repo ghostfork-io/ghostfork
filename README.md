@@ -69,7 +69,7 @@ Git is the only other requirement.
 **macOS / Linux:**
 
 ```bash
-curl -sSL https://ghostfork.io/install.sh | sh
+curl -fsSL https://ghostfork.io/install.sh | sh
 ```
 
 **Windows:**
