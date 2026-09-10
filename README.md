@@ -66,47 +66,120 @@ Everything after `gf login` is plain Git. Your editors, hooks, branches, and wor
 
 Git is the only other requirement.
 
-**macOS / Linux:**
+### One command (macOS / Linux)
 
 ```bash
-curl -fsSL https://ghostfork.io/install.sh | sh
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/ghostfork-io/ghostfork/main/install.sh)"
 ```
 
-**Windows:**
+### One command (Windows, PowerShell)
 
 ```powershell
-irm https://ghostfork.io/install.ps1 | iex
+irm https://raw.githubusercontent.com/ghostfork-io/ghostfork/main/install.ps1 | iex
 ```
 
-That's it. The installer picks the right build for your machine, checks it
-against the release's `SHA256SUMS`, installs `gf` plus the `git-remote-gf`
-helper Git needs for `gf://` remotes, and puts them on your `PATH`. Open a new
-terminal and run `gf login`.
+The installer picks the right build for your machine, **verifies it against the
+release's `SHA256SUMS`**, installs `gf` plus the `git-remote-gf` helper Git
+needs for `gf://` remotes, and puts them on your `PATH`. Open a new terminal
+and run `gf login`.
 
-**To upgrade,** run the same command again — it replaces the binary in place.
-**To uninstall** on Windows, use Settings → Apps; on macOS/Linux, delete `gf`
+**Upgrade** by running the same command again — it replaces the binary in
+place. **Uninstall** on Windows via Settings → Apps; on macOS/Linux delete `gf`
 and `git-remote-gf` from `~/.local/bin`.
 
-<details>
-<summary>Prefer to do it yourself?</summary>
+The script honours `GF_VERSION` to pin a release, `GF_INSTALL_DIR` to choose
+where binaries land, and `NO_MODIFY_PATH=1` to leave your shell config alone.
 
-Every release publishes plain binaries — `gf-darwin-arm64`, `gf-darwin-amd64`,
-`gf-linux-amd64`, `gf-linux-arm64`, `gf-windows-amd64.exe` — plus a
-`SHA256SUMS`, on the [Releases](https://github.com/ghostfork-io/ghostfork/releases)
-page.
+---
+
+### Install from a release binary
+
+If you would rather not pipe a script into your shell — a reasonable position,
+and one we are not going to argue with on a security product — every release
+publishes plain binaries you can download, check, and place yourself. This is
+the same thing the script automates.
+
+**1. Pick your asset** from the
+[latest release](https://github.com/ghostfork-io/ghostfork/releases/latest):
+
+| Your machine | Asset |
+| --- | --- |
+| macOS, Apple Silicon (M1–M4) | `gf-darwin-arm64` |
+| macOS, Intel | `gf-darwin-amd64` |
+| Linux, x86_64 | `gf-linux-amd64` |
+| Windows, x64 | `gf-setup-windows-amd64.exe` (installer) or `gf-windows-amd64.exe` (bare binary) |
+
+Not sure which Mac you have? `uname -m` prints `arm64` or `x86_64`.
+
+> **Linux on arm64** (Graviton, Ampere, Raspberry Pi) is not in a published
+> release yet — build from source for now, see below.
+
+**2. Download it and the checksums.**
 
 ```bash
-# macOS / Linux — substitute your platform
-curl -sSLo gf https://github.com/ghostfork-io/ghostfork/releases/latest/download/gf-linux-amd64
-chmod +x gf
-mkdir -p ~/.local/bin && mv gf ~/.local/bin/gf
-# Git discovers gf:// remotes through this name:
+ASSET=gf-linux-amd64          # ← from the table above
+BASE=https://github.com/ghostfork-io/ghostfork/releases/latest/download
+
+curl -fsSLO "$BASE/$ASSET"
+curl -fsSL  "$BASE/SHA256SUMS" -o SHA256SUMS
+```
+
+**3. Verify before you run it.** Skipping this defeats the point of checking
+anything at all — an unverified binary is one you are trusting your network
+with.
+
+```bash
+grep " $ASSET\$" SHA256SUMS | sha256sum -c -      # Linux
+grep " $ASSET\$" SHA256SUMS | shasum -a 256 -c -  # macOS
+```
+
+You want `gf-linux-amd64: OK`. Anything else — stop, and do not run the file.
+
+**4. Install it under the two names Git needs.**
+
+```bash
+chmod +x "$ASSET"
+mkdir -p ~/.local/bin
+mv "$ASSET" ~/.local/bin/gf
 ln -sf ~/.local/bin/gf ~/.local/bin/git-remote-gf
 ```
 
-Make sure `~/.local/bin` is on your `PATH`.
+**5. Put it on your `PATH`** if it isn't already:
 
-From source (requires Go 1.25+):
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+```
+
+Open a new terminal, then check both names resolve:
+
+```bash
+gf --version
+which git-remote-gf
+```
+
+> **macOS:** a binary downloaded in a *browser* is quarantined by Gatekeeper
+> ("cannot be opened because the developer cannot be verified"). Clear it once
+> with `xattr -d com.apple.quarantine ~/.local/bin/gf`. Downloading with `curl`
+> as above does not set that attribute, so this only bites if you clicked the
+> link.
+
+**Windows:** download `gf-setup-windows-amd64.exe` and run it — a small window
+with Install and Uninstall. It is per-user (no admin, no UAC), installs to
+`%LOCALAPPDATA%\Programs\ghostfork`, adds that to your PATH, and registers an
+Add/Remove Programs entry. `--silent` installs with no window. Verify it first
+the same way:
+
+```powershell
+$asset = "gf-setup-windows-amd64.exe"
+(Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+# compare against the matching line in SHA256SUMS
+```
+
+---
+
+### From source
+
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/ghostfork-io/ghostfork.git
@@ -114,11 +187,8 @@ cd ghostfork
 make install     # gf + the git-remote-gf link to ~/.local/bin, updates PATH
 ```
 
-The install script honours `GF_VERSION` to pin a release, `GF_INSTALL_DIR` to
-choose where binaries land, and `NO_MODIFY_PATH=1` to leave your shell config
-alone.
-
-</details>
+This is also the way to get a build for a platform we do not publish yet —
+`make build-linux-arm64`, for instance.
 
 The `git-remote-gf` name is how Git finds the helper for `gf://` URLs — it must sit next to `gf` on your `PATH`. No daemon, no background service: Git invokes the helper only for pushes and pulls.
 

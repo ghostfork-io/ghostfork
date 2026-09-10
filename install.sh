@@ -1,7 +1,10 @@
 #!/bin/sh
 # Ghostfork gf installer for macOS and Linux.
 #
-#   curl -fsSL https://ghostfork.io/install.sh | sh
+#   sh -c "$(curl -fsSL https://raw.githubusercontent.com/ghostfork-io/ghostfork/main/install.sh)"
+#
+# (https://ghostfork.io/install.sh will be the short form once the redirect is
+# live; until then use the URL above, which is what it will redirect to.)
 #
 # Downloads the prebuilt gf binary for this machine from GitHub Releases,
 # verifies it against the release's SHA256SUMS, installs it alongside the

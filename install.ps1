@@ -1,6 +1,9 @@
 # Ghostfork gf installer for Windows.
 #
-#   irm https://ghostfork.io/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/ghostfork-io/ghostfork/main/install.ps1 | iex
+#
+# (https://ghostfork.io/install.ps1 will be the short form once the redirect is
+# live; until then use the URL above, which is what it will redirect to.)
 #
 # Downloads the signed-off gf setup program from GitHub Releases, verifies it
 # against the release's SHA256SUMS, and runs it silently. The setup program
@@ -54,7 +57,7 @@ if ($arch -eq 'ARM64') {
 Windows on ARM64 is not published yet.
 
 Windows 11 can run the x64 build under emulation. To do that deliberately:
-  `$env:PROCESSOR_ARCHITECTURE='AMD64'; irm https://ghostfork.io/install.ps1 | iex
+  `$env:PROCESSOR_ARCHITECTURE='AMD64'; irm https://raw.githubusercontent.com/ghostfork-io/ghostfork/main/install.ps1 | iex
 
 Or build from source: https://github.com/$Repo#readme
 "@
