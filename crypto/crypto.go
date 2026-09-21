@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -166,17 +167,46 @@ func ageRecipient(pub ed25519.PublicKey) (age.Recipient, error) {
 	return r, nil
 }
 
+// ErrLegacyPackfile is returned when a stored packfile ends at the sentinel
+// with no terminator — the format written before the chunk count was
+// authenticated. A stream with no terminator is exactly what a truncating
+// server would produce, so it is refused rather than decrypted; accepting it
+// would be a downgrade that reopens the hole the terminator closes.
+//
+// Note this cannot be repaired by `gf rotate-key`: rotation re-encrypts by
+// cloning the vault over gf://, which decrypts through this same function and
+// so hits this error first. Migrating a vault written in the old format needs a
+// machine that still holds a plaintext clone of the history, pushing it back up
+// so it is re-encrypted in the current format.
+var ErrLegacyPackfile = errors.New(
+	"packfile predates the authenticated stream terminator and cannot be safely " +
+		"decrypted; re-push the vault's history from a machine that still has a " +
+		"local clone of it")
+
 // EncryptPackfile encrypts src to dst using XChaCha20-Poly1305 with repoKey.
 //
 // Wire format:
 //
 //	[24-byte random nonce]
-//	[repeating: 4-byte LE plaintext chunk size | ciphertext+tag]
-//	[4-byte LE sentinel: 0]
+//	[repeating: 4-byte LE plaintext chunk size (nonzero) | ciphertext+tag]
+//	[4-byte LE sentinel: 0][16-byte terminator tag]
 //
 // Each chunk's nonce is derived by XOR-ing the last 8 bytes of the base nonce
-// with the little-endian chunk index. The chunk index is also included as AAD
-// so that reordering or truncation is detected.
+// with the little-endian chunk index. The chunk index is also included as AAD,
+// so a chunk that moves to a different position — reordered, duplicated, or
+// shifted forward because an earlier chunk was removed — no longer
+// authenticates.
+//
+// The index binding alone does not stop a server from lopping chunks off the
+// END of the stream: the surviving chunks keep their original indices, so every
+// nonce and AAD still matches and a truncated prefix decrypts cleanly. The
+// terminator closes that. It is an empty AEAD seal at index N (the number of
+// data chunks), so the chunk count is itself authenticated: cutting the stream
+// to k < N chunks requires a terminator sealed at index k, which cannot be
+// produced without the repo key. The one the attacker holds is bound to N.
+//
+// Terminating with a real AEAD seal rather than a length field also means there
+// is no unauthenticated integer for a forged stream to lie about.
 func EncryptPackfile(dst io.Writer, src io.Reader, repoKey []byte) error {
 	aead, err := chacha20poly1305.NewX(repoKey)
 	if err != nil {
@@ -215,7 +245,13 @@ func EncryptPackfile(dst io.Writer, src io.Reader, repoKey []byte) error {
 		}
 	}
 
-	return binary.Write(dst, binary.LittleEndian, uint32(0))
+	// Sentinel, then the terminator sealed at the index one past the last data
+	// chunk — binding the total chunk count into the stream.
+	if err := binary.Write(dst, binary.LittleEndian, uint32(0)); err != nil {
+		return err
+	}
+	_, err = dst.Write(aead.Seal(nil, chunkNonce(baseNonce, idx), nil, indexAAD(idx)))
+	return err
 }
 
 // DecryptPackfile decrypts src to dst using repoKey.
@@ -238,10 +274,28 @@ func DecryptPackfile(dst io.Writer, src io.Reader, repoKey []byte) error {
 			return fmt.Errorf("reading chunk size: %w", err)
 		}
 		if plainSize == 0 {
-			// Sentinel reached — verify no trailing bytes follow.
+			// Sentinel reached. The terminator must authenticate at exactly this
+			// index, which is what proves no chunks were cut off the end.
+			term := make([]byte, aead.Overhead())
+			if _, err := io.ReadFull(src, term); err != nil {
+				if errors.Is(err, io.EOF) {
+					// Nothing at all after the sentinel: this is the pre-terminator
+					// format. Refuse it rather than fall back — accepting a stream
+					// with no terminator would hand an attacker a downgrade that
+					// reopens truncation. Say so plainly, because the fix is an
+					// operator action, not a bug.
+					return ErrLegacyPackfile
+				}
+				return fmt.Errorf("reading stream terminator: %w", err)
+			}
+			if _, err := aead.Open(nil, chunkNonce(baseNonce, idx), term, indexAAD(idx)); err != nil {
+				return fmt.Errorf("verifying stream terminator at chunk %d "+
+					"(the stream was truncated or tampered with): %w", idx, err)
+			}
+			// Verify no trailing bytes follow.
 			var extra [1]byte
 			if n, _ := src.Read(extra[:]); n > 0 {
-				return fmt.Errorf("unexpected trailing data after stream sentinel")
+				return fmt.Errorf("unexpected trailing data after stream terminator")
 			}
 			return nil
 		}
