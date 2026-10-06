@@ -79,6 +79,13 @@ type RepoRef struct {
 	Branches int `json:"branches"`
 }
 
+// SetMirrorRequest is the body of PUT /api/v1/repos/{owner}/{repo}/mirror.
+// Mirror marks the vault as kept in sync from an external source by
+// `gf mirror`. It is a bare flag on purpose: the source's URL never travels.
+type SetMirrorRequest struct {
+	Mirror bool `json:"mirror"`
+}
+
 // MyReposResponse lists the repos the authenticated caller holds a wrapped
 // key for — i.e. exactly the set it can decrypt. Returned by
 // GET /api/v1/me/repos; `gf serve` uses it to build the dashboard's repo

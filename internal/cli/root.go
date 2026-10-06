@@ -100,6 +100,7 @@ func init() {
 	rootCmd.AddCommand(keyFingerprintCmd)
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(mirrorCmd)
 
 	// Deprecated aliases from the repo→vault rename: hidden, warn on use, still
 	// work so existing scripts and muscle memory don't break.

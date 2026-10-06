@@ -62,6 +62,28 @@ func runInitVault(cmd *cobra.Command, args []string) error {
 	}
 	slog.Debug("init-vault start", slog.String("name", repoName), slog.String("owner", sess.cfg.Username))
 
+	if err := createVault(sess, repoName); err != nil {
+		return err
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "\nVault created: %s/%s\n\n", sess.cfg.Username, repoName)
+	fmt.Fprintf(out, "This vault now exists on the server, empty and ready. Whenever you're\n")
+	fmt.Fprintf(out, "ready, you can add it as a new remote to an existing git repo and push\n")
+	fmt.Fprintf(out, "your code to it:\n\n")
+	fmt.Fprintf(out, "    git remote add <remote-name> gf://%s/%s\n", sess.cfg.Username, repoName)
+	fmt.Fprintf(out, "    git push -u <remote-name> <branch-name>\n\n")
+	fmt.Fprintf(out, "<remote-name> is any name you want to give this remote locally\n")
+	fmt.Fprintf(out, "(e.g. \"ghostfork\"). <branch-name> is the branch you want to push\n")
+	fmt.Fprintf(out, "(e.g. \"main\"). Nothing happens until you run these yourself — do this\n")
+	fmt.Fprintf(out, "whenever you're ready.\n\n")
+	return nil
+}
+
+// createVault generates a fresh vault key locally, wraps it with the caller's
+// public key, and creates the vault on the server with the caller as its
+// owner and only member. Shared by init-vault and mirror.
+func createVault(sess *session, repoName string) error {
 	repoKey, err := crypto.GenerateRepoKey()
 	if err != nil {
 		return fmt.Errorf("generating repo key: %w", err)
@@ -90,17 +112,5 @@ func runInitVault(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating vault: %w", err)
 	}
 	slog.Debug("repo created on server", slog.String("name", repoName))
-
-	out := cmd.OutOrStdout()
-	fmt.Fprintf(out, "\nVault created: %s/%s\n\n", sess.cfg.Username, repoName)
-	fmt.Fprintf(out, "This vault now exists on the server, empty and ready. Whenever you're\n")
-	fmt.Fprintf(out, "ready, you can add it as a new remote to an existing git repo and push\n")
-	fmt.Fprintf(out, "your code to it:\n\n")
-	fmt.Fprintf(out, "    git remote add <remote-name> gf://%s/%s\n", sess.cfg.Username, repoName)
-	fmt.Fprintf(out, "    git push -u <remote-name> <branch-name>\n\n")
-	fmt.Fprintf(out, "<remote-name> is any name you want to give this remote locally\n")
-	fmt.Fprintf(out, "(e.g. \"ghostfork\"). <branch-name> is the branch you want to push\n")
-	fmt.Fprintf(out, "(e.g. \"main\"). Nothing happens until you run these yourself — do this\n")
-	fmt.Fprintf(out, "whenever you're ready.\n\n")
 	return nil
 }

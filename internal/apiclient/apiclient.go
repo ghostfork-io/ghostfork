@@ -221,6 +221,13 @@ func (c *Client) UpdateRef(owner, repo, branch, sha string) error {
 		types.UpdateRefRequest{CommitSHA: sha}, nil)
 }
 
+// SetMirror sets or clears the vault's mirror flag (see `gf mirror`). Only
+// the boolean is sent — never the source repo's URL.
+func (c *Client) SetMirror(owner, repo string, mirror bool) error {
+	return c.doJSON(http.MethodPut, repoPath(owner, repo)+"/mirror",
+		types.SetMirrorRequest{Mirror: mirror}, nil)
+}
+
 // SetRefs commits a push (git-receive-pack style): the server promotes the
 // staged packfiles (seqs) out of quarantine, then updates each ref
 // independently. It returns the refs that could not be updated (empty when all
